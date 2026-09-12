@@ -1,0 +1,26 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+*.patch
+*.log
+# Editor directories and files
+.vscode/
+.idea/
+.idea/*
+# OS-generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+Icon?
+.Spotlight-V100
+.Trashes
+ehthumbs_vista.db
+Icon\r

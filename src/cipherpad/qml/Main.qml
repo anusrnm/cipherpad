@@ -1,0 +1,879 @@
+import QtQuick
+import QtQuick.Controls.Basic
+import QtQuick.Layouts
+import QtQuick.Dialogs
+import Cipherpad
+
+ApplicationWindow {
+    id: window
+
+    width: Prefs.windowWidth
+    height: Prefs.windowHeight
+    visibility: Prefs.windowMaximized ? Window.Maximized : Window.Windowed
+    visible: true
+    color: Prefs.background
+    font.family: Prefs.fontFamily
+    font.pixelSize: Prefs.fontSize
+    font.bold: Prefs.fontBold
+    font.italic: Prefs.fontItalic
+    title: (currentDoc
+            ? (currentDoc.modified ? "\u2022 " : "") + currentDoc.displayName + " \u2014 "
+            : "") + "Cipherpad"
+
+    readonly property var currentDoc: Documents.currentDocument
+    readonly property var currentPane: Documents.count >= 0 ? paneRepeater.itemAt(Documents.currentIndex) : null
+    property int pendingCloseIndex: -1
+    property string pendingAction: ""
+    property var pendingPaths: []
+
+    onWidthChanged: if (visibility === Window.Windowed) Prefs.windowWidth = width
+    onHeightChanged: if (visibility === Window.Windowed) Prefs.windowHeight = height
+    onVisibilityChanged: function (visibility) {
+        Prefs.windowMaximized = (visibility === Window.Maximized)
+    }
+
+    onClosing: function (close) {
+        if (Documents.hasModifiedDocuments && pendingAction !== "quit") {
+            close.accepted = false
+            pendingAction = "quit"
+            unsavedDialog.openFor(-1)
+        }
+    }
+
+    // ------------------------------------------------------------ commands
+    function paneAt(index) { return paneRepeater.itemAt(index) }
+
+    function newFile() {
+        Documents.currentIndex = Documents.newDocument()
+    }
+
+    function openFiles(paths) {
+        for (let i = 0; i < paths.length; ++i) {
+            const path = String(paths[i]).replace(/^file:\/{3}/, "")
+            const result = Documents.openFile(path)
+            if (result === -2) {
+                pendingPaths = paths.slice(i + 1)
+                passphraseDialog.intent = "open"
+                passphraseDialog.pendingPath = path
+                passphraseDialog.promptUnlock(baseName(path), "")
+                return
+            }
+            if (result >= 0) {
+                Documents.currentIndex = result
+                Prefs.addRecentFile(path)
+            }
+        }
+    }
+
+    function baseName(path) {
+        const parts = String(path).split(/[\\/]/)
+        return parts[parts.length - 1]
+    }
+
+    function saveCurrent() {
+        if (!currentDoc)
+            return false
+        if (currentDoc.isUntitled) {
+            saveDialog.open()
+            return false
+        }
+        const ok = currentDoc.save(preparedText())
+        if (ok) {
+            currentDoc.modified = false
+            status.flash("Saved " + currentDoc.fileName)
+            Prefs.addRecentFile(currentDoc.filePath)
+        }
+        return ok
+    }
+
+    // Applies the on-save clean-ups through the metrics layer so they are
+    // undoable and the editor stays in sync with what hits the disk.
+    function preparedText() {
+        const pane = currentPane
+        if (!pane)
+            return ""
+        if (Prefs.trimTrailingWhitespaceOnSave) {
+            const span = TextOps.trimTrailingWhitespace(pane.editor.text, 0, pane.editor.text.length)
+            pane.applySpan(span)
+        }
+        let text = pane.editor.text
+        if (Prefs.ensureNewlineAtEof && text.length > 0 && !text.endsWith("\n")) {
+            pane.metrics.replaceRange(text.length, text.length, "\n")
+            text = pane.editor.text
+        }
+        return text
+    }
+
+    function closeTab(index) {
+        const doc = Documents.documentAt(index)
+        if (doc && doc.modified) {
+            pendingAction = "close"
+            unsavedDialog.openFor(index)
+            return
+        }
+        Documents.closeDocument(index)
+        if (Documents.count === 0)
+            newFile()
+    }
+
+    function runOp(fn) {
+        const pane = currentPane
+        if (!pane)
+            return
+        pane.applySpan(fn(pane.editor.text, pane.editor.selectionStart, pane.editor.selectionEnd))
+        pane.focusEditor()
+    }
+
+    function toast(message) { status.flash(message) }
+
+    // ------------------------------------------------------------- dialogs
+    FileDialog {
+        id: openDialog
+        title: "Open files"
+        fileMode: FileDialog.OpenFiles
+        nameFilters: ["All files (*)", "Text files (*.txt *.md *.log)",
+                      "Encrypted files (*.enc *.aes)", "Source files (*.py *.js *.json *.xml *.html *.css)"]
+        onAccepted: window.openFiles(selectedFiles)
+    }
+
+    FileDialog {
+        id: saveDialog
+        title: "Save as"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["All files (*)", "Text files (*.txt)", "Encrypted files (*.enc)"]
+        property bool encrypting: false
+        onAccepted: {
+            const path = String(selectedFile).replace(/^file:\/{3}/, "")
+            if (encrypting) {
+                passphraseDialog.pendingPath = path
+                passphraseDialog.promptNew(window.baseName(path))
+            } else {
+                if (window.currentDoc.saveAs(path, window.preparedText())) {
+                    window.currentDoc.modified = false
+                    Prefs.addRecentFile(path)
+                    Documents.refresh(Documents.currentIndex)
+                    status.flash("Saved " + window.baseName(path))
+                }
+            }
+            encrypting = false
+        }
+    }
+
+    PassphraseDialog {
+        id: passphraseDialog
+        property string pendingPath: ""
+        // "open" | "saveAs" | "encrypt" | "change"
+        property string intent: "open"
+
+        onPassphraseAccepted: function (passphrase) {
+            switch (intent) {
+            case "open": {
+                const result = Documents.openFile(pendingPath, passphrase)
+                if (result >= 0) {
+                    Documents.currentIndex = result
+                    Prefs.addRecentFile(pendingPath)
+                    if (window.pendingPaths.length > 0) {
+                        const rest = window.pendingPaths
+                        window.pendingPaths = []
+                        window.openFiles(rest)
+                    }
+                } else {
+                    promptUnlock(window.baseName(pendingPath), "Wrong passphrase, or the file is damaged.")
+                }
+                break
+            }
+            case "saveAs":
+                if (window.currentDoc.saveAs(pendingPath, window.preparedText(), true, passphrase)) {
+                    window.currentDoc.modified = false
+                    Prefs.addRecentFile(pendingPath)
+                    Documents.refresh(Documents.currentIndex)
+                    status.flash("Saved encrypted " + window.baseName(pendingPath))
+                }
+                break
+            case "encrypt":
+                if (window.currentDoc.encryptWith(window.preparedText(), passphrase)) {
+                    window.currentDoc.modified = false
+                    Documents.refresh(Documents.currentIndex)
+                    status.flash("File is now encrypted")
+                }
+                break
+            case "change":
+                if (window.currentDoc.changePassphrase(window.preparedText(), passphrase))
+                    status.flash("Passphrase changed")
+                break
+            }
+        }
+
+        onRejected: {
+            window.pendingPaths = []
+        }
+    }
+
+    GoToLineDialog {
+        id: gotoDialog
+        onLineRequested: function (line) { if (window.currentPane) window.currentPane.goToLine(line) }
+    }
+
+    PreferencesDialog { id: prefsDialog }
+    AboutDialog { id: aboutDialog }
+    StatisticsDialog { id: statsDialog }
+
+    AppDialog {
+        id: unsavedDialog
+        heading: "Unsaved changes"
+        standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
+        width: 400
+
+        property int index: -1
+        property string names: ""
+
+        function openFor(idx) {
+            index = idx
+            if (idx >= 0) {
+                const doc = Documents.documentAt(idx)
+                names = doc ? doc.displayName : ""
+            } else {
+                names = "One or more files"
+            }
+            open()
+        }
+
+        Label {
+            width: parent.width
+            text: unsavedDialog.index >= 0
+                  ? "\u201c" + unsavedDialog.names + "\u201d has unsaved changes."
+                  : "Some open files have unsaved changes."
+            color: Prefs.chromeText
+            wrapMode: Text.Wrap
+        }
+
+        onAccepted: {
+            // Save
+            if (index >= 0) {
+                Documents.currentIndex = index
+                if (window.saveCurrent()) {
+                    Documents.closeDocument(index)
+                    if (Documents.count === 0) window.newFile()
+                }
+            } else {
+                for (let i = 0; i < Documents.count; ++i) {
+                    Documents.currentIndex = i
+                    if (Documents.currentDocument.modified)
+                        window.saveCurrent()
+                }
+                if (!Documents.hasModifiedDocuments)
+                    Qt.quit()
+            }
+            window.pendingAction = ""
+        }
+
+        onDiscarded: {
+            if (index >= 0) {
+                Documents.documentAt(index).modified = false
+                Documents.closeDocument(index)
+                if (Documents.count === 0) window.newFile()
+            } else {
+                Documents.closeAll()
+                Qt.quit()
+            }
+            window.pendingAction = ""
+            close()
+        }
+
+        onRejected: window.pendingAction = ""
+    }
+
+    AppDialog {
+        id: messageDialog
+        heading: "Error"
+        standardButtons: Dialog.Close
+        width: 420
+        property string message: ""
+        function show(text) { message = text; open() }
+        Label {
+            width: parent.width
+            text: messageDialog.message
+            color: Prefs.chromeText
+            wrapMode: Text.Wrap
+        }
+    }
+
+    Connections {
+        target: Documents
+        function onErrorOccurred(message) { messageDialog.show(message) }
+    }
+
+    // ---------------------------------------------------------------- menu
+    menuBar: MenuBar {
+        background: Rectangle {
+            color: Prefs.chrome
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: Prefs.border
+            }
+        }
+        delegate: MenuBarItem {
+            id: menuBarItem
+            contentItem: Text {
+                text: menuBarItem.text
+                color: Prefs.chromeText
+                horizontalAlignment: Text.AlignLeft
+                verticalAlignment: Text.AlignVCenter
+                font.pixelSize: Math.max(11, Prefs.fontSize - 1)
+            }
+            background: Rectangle {
+                color: menuBarItem.highlighted ? Prefs.accent : "transparent"
+            }
+        }
+
+        AppMenu {
+            title: "File"
+            AppMenuItem { text: "New"; shortcutText: "Ctrl+N"; onTriggered: window.newFile() }
+            AppMenuItem { text: "Open\u2026"; shortcutText: "Ctrl+O"; onTriggered: openDialog.open() }
+            AppMenu {
+                id: recentMenu
+                title: "Open Recent"
+                enabled: Prefs.recentFiles.length > 0
+                Instantiator {
+                    model: Prefs.recentFiles
+                    delegate: AppMenuItem {
+                        text: window.baseName(modelData)
+                        onTriggered: window.openFiles([modelData])
+                    }
+                    onObjectAdded: function (index, object) { recentMenu.insertItem(index, object) }
+                    onObjectRemoved: function (index, object) { recentMenu.removeItem(object) }
+                }
+            }
+            MenuSeparator {}
+            AppMenuItem { text: "Save"; shortcutText: "Ctrl+S"; onTriggered: window.saveCurrent() }
+            AppMenuItem {
+                text: "Save As\u2026"
+                shortcutText: "Ctrl+Shift+S"
+                onTriggered: { saveDialog.encrypting = false; saveDialog.open() }
+            }
+            AppMenuItem {
+                text: "Save Encrypted As\u2026"
+                onTriggered: {
+                    saveDialog.encrypting = true
+                    passphraseDialog.intent = "saveAs"
+                    saveDialog.open()
+                }
+            }
+            AppMenuItem {
+                text: "Reload from Disk"
+                enabled: window.currentDoc && !window.currentDoc.isUntitled
+                onTriggered: window.currentDoc.reload()
+            }
+            MenuSeparator {}
+            AppMenuItem { text: "Close Tab"; shortcutText: "Ctrl+W"; onTriggered: window.closeTab(Documents.currentIndex) }
+            AppMenuItem { text: "Quit"; shortcutText: "Ctrl+Q"; onTriggered: window.close() }
+        }
+
+        AppMenu {
+            title: "Edit"
+            AppMenuItem { text: "Undo"; shortcutText: "Ctrl+Z"; onTriggered: window.currentPane.editor.undo() }
+            AppMenuItem { text: "Redo"; shortcutText: "Ctrl+Y"; onTriggered: window.currentPane.editor.redo() }
+            MenuSeparator {}
+            AppMenuItem { text: "Cut"; shortcutText: "Ctrl+X"; onTriggered: window.currentPane.editor.cut() }
+            AppMenuItem { text: "Copy"; shortcutText: "Ctrl+C"; onTriggered: window.currentPane.editor.copy() }
+            AppMenuItem { text: "Paste"; shortcutText: "Ctrl+V"; onTriggered: window.currentPane.editor.paste() }
+            AppMenuItem { text: "Select All"; shortcutText: "Ctrl+A"; onTriggered: window.currentPane.editor.selectAll() }
+            MenuSeparator {}
+            AppMenuItem { text: "Find\u2026"; shortcutText: "Ctrl+F"; onTriggered: findBar.open(false) }
+            AppMenuItem { text: "Replace\u2026"; shortcutText: "Ctrl+H"; onTriggered: findBar.open(true) }
+            AppMenuItem { text: "Go to Line\u2026"; shortcutText: "Ctrl+G"
+                onTriggered: gotoDialog.promptFor(window.currentPane.metrics.lineCount(),
+                                                  window.currentPane.currentLine) }
+        }
+
+        AppMenu {
+            title: "Format"
+            AppMenuItem { text: "Duplicate Line"; shortcutText: "Ctrl+D"
+                onTriggered: window.runOp(TextOps.duplicateLines) }
+            AppMenuItem { text: "Delete Line"; shortcutText: "Ctrl+Shift+K"
+                onTriggered: window.runOp(TextOps.deleteLines) }
+            AppMenuItem { text: "Move Line Up"; shortcutText: "Alt+Up"
+                onTriggered: window.runOp(TextOps.moveLinesUp) }
+            AppMenuItem { text: "Move Line Down"; shortcutText: "Alt+Down"
+                onTriggered: window.runOp(TextOps.moveLinesDown) }
+            AppMenuItem { text: "Join Lines"; shortcutText: "Ctrl+J"
+                onTriggered: window.runOp(TextOps.joinLines) }
+            MenuSeparator {}
+            AppMenuItem { text: "Toggle Comment"; shortcutText: "Ctrl+/"
+                onTriggered: {
+                    const pane = window.currentPane
+                    pane.applySpan(TextOps.toggleComment(pane.editor.text, pane.editor.selectionStart,
+                                                         pane.editor.selectionEnd, window.currentDoc.language))
+                }
+            }
+            AppMenuItem { text: "Indent"; onTriggered: {
+                    const pane = window.currentPane
+                    pane.applySpan(TextOps.indent(pane.editor.text, pane.editor.selectionStart,
+                                                  pane.editor.selectionEnd, Prefs.tabWidth, Prefs.insertSpaces))
+                } }
+            AppMenuItem { text: "Unindent"; onTriggered: {
+                    const pane = window.currentPane
+                    pane.applySpan(TextOps.unindent(pane.editor.text, pane.editor.selectionStart,
+                                                    pane.editor.selectionEnd, Prefs.tabWidth))
+                } }
+            MenuSeparator {}
+            AppMenuItem { text: "UPPERCASE"; onTriggered: window.runOp(TextOps.upperCase) }
+            AppMenuItem { text: "lowercase"; onTriggered: window.runOp(TextOps.lowerCase) }
+            AppMenuItem { text: "Title Case"; onTriggered: window.runOp(TextOps.titleCase) }
+            AppMenuItem { text: "Toggle Case"; onTriggered: window.runOp(TextOps.toggleCase) }
+            MenuSeparator {}
+            AppMenuItem { text: "Sort Lines"; onTriggered: {
+                    const pane = window.currentPane
+                    pane.applySpan(TextOps.sortLines(pane.editor.text, pane.editor.selectionStart,
+                                                     pane.editor.selectionEnd, false, false))
+                } }
+            AppMenuItem { text: "Sort Lines Descending"; onTriggered: {
+                    const pane = window.currentPane
+                    pane.applySpan(TextOps.sortLines(pane.editor.text, pane.editor.selectionStart,
+                                                     pane.editor.selectionEnd, true, false))
+                } }
+            AppMenuItem { text: "Remove Duplicate Lines"; onTriggered: window.runOp(TextOps.uniqueLines) }
+            AppMenuItem { text: "Reverse Lines"; onTriggered: window.runOp(TextOps.reverseLines) }
+            AppMenuItem { text: "Trim Trailing Whitespace"; onTriggered: window.runOp(TextOps.trimTrailingWhitespace) }
+            MenuSeparator {}
+            AppMenuItem { text: "Insert Timestamp"; onTriggered: {
+                    const pane = window.currentPane
+                    pane.insertAtCursor(TextOps.timestamp(""))
+                } }
+        }
+
+        AppMenu {
+            title: "View"
+            AppMenuItem { text: "Zoom In"; shortcutText: "Ctrl++"; onTriggered: Prefs.adjustFontSize(1) }
+            AppMenuItem { text: "Zoom Out"; shortcutText: "Ctrl+-"; onTriggered: Prefs.adjustFontSize(-1) }
+            AppMenuItem { text: "Reset Zoom"; shortcutText: "Ctrl+0"; onTriggered: Prefs.fontSize = 13 }
+            MenuSeparator {}
+            AppMenuItem { text: "Word Wrap"; checkable: true; checked: Prefs.wordWrap
+                onTriggered: Prefs.wordWrap = !Prefs.wordWrap }
+            AppMenuItem { text: "Line Numbers"; checkable: true; checked: Prefs.showLineNumbers
+                onTriggered: Prefs.showLineNumbers = !Prefs.showLineNumbers }
+            AppMenuItem { text: "Highlight Current Line"; checkable: true; checked: Prefs.highlightCurrentLine
+                onTriggered: Prefs.highlightCurrentLine = !Prefs.highlightCurrentLine }
+            AppMenuItem { text: "Syntax Highlighting"; checkable: true; checked: Prefs.syntaxHighlighting
+                onTriggered: Prefs.syntaxHighlighting = !Prefs.syntaxHighlighting }
+            AppMenuItem { text: "Show Whitespace"; checkable: true; checked: Prefs.showWhitespace
+                onTriggered: Prefs.showWhitespace = !Prefs.showWhitespace }
+            MenuSeparator {}
+            AppMenuItem { text: "Toolbar"; checkable: true; checked: Prefs.showToolBar
+                onTriggered: Prefs.showToolBar = !Prefs.showToolBar }
+            AppMenuItem { text: "Status Bar"; checkable: true; checked: Prefs.showStatusBar
+                onTriggered: Prefs.showStatusBar = !Prefs.showStatusBar }
+        }
+
+        AppMenu {
+            title: "Tools"
+            AppMenuItem {
+                text: "Encrypt File\u2026"
+                shortcutText: "Ctrl+Shift+E"
+                enabled: window.currentDoc && !window.currentDoc.encrypted
+                onTriggered: {
+                    passphraseDialog.intent = "encrypt"
+                    passphraseDialog.promptNew(window.currentDoc.displayName)
+                }
+            }
+            AppMenuItem {
+                text: "Change Passphrase\u2026"
+                enabled: window.currentDoc && window.currentDoc.encrypted
+                onTriggered: {
+                    passphraseDialog.intent = "change"
+                    passphraseDialog.promptNew(window.currentDoc.displayName)
+                }
+            }
+            AppMenuItem {
+                text: "Remove Encryption"
+                enabled: window.currentDoc && window.currentDoc.encrypted
+                onTriggered: {
+                    if (window.currentDoc.removeEncryption(window.preparedText())) {
+                        Documents.refresh(Documents.currentIndex)
+                        status.flash("Encryption removed")
+                    }
+                }
+            }
+            MenuSeparator {}
+            AppMenuItem { text: "Statistics\u2026"; onTriggered: {
+                    const pane = window.currentPane
+                    statsDialog.showFor(window.currentDoc.displayName,
+                                        TextOps.statistics(pane.editor.text, ""),
+                                        TextOps.statistics(pane.editor.text, pane.editor.selectedText))
+                } }
+            AppMenuItem { text: "Preferences\u2026"; shortcutText: "Ctrl+,"; onTriggered: prefsDialog.open() }
+        }
+
+        AppMenu {
+            title: "Help"
+            AppMenuItem { text: "About"; onTriggered: aboutDialog.open() }
+        }
+    }
+
+    // ------------------------------------------------------------- toolbar
+    header: ColumnLayout {
+        spacing: 0
+
+        ToolBar {
+            Layout.fillWidth: true
+            visible: Prefs.showToolBar
+            background: Rectangle {
+                color: Prefs.chrome
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: 1
+                    color: Prefs.border
+                }
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 6
+                anchors.rightMargin: 6
+                spacing: 4
+
+                BarButton { text: "\uff0b"; tip: "New (Ctrl+N)"; onClicked: window.newFile() }
+                BarButton { text: "\u2b06"; tip: "Open (Ctrl+O)"; onClicked: openDialog.open() }
+                BarButton { text: "\u2b07"; tip: "Save (Ctrl+S)"; onClicked: window.saveCurrent() }
+                ToolSeparator {}
+                BarButton { text: "\u21b6"; tip: "Undo"; onClicked: window.currentPane.editor.undo() }
+                BarButton { text: "\u21b7"; tip: "Redo"; onClicked: window.currentPane.editor.redo() }
+                ToolSeparator {}
+                BarButton { text: "\ud83d\udd0d"; tip: "Find (Ctrl+F)"; onClicked: findBar.open(false) }
+                ToolSeparator {}
+                BarButton {
+                    text: "\ud83d\udd12"
+                    tip: window.currentDoc && window.currentDoc.encrypted
+                         ? "File is encrypted" : "Encrypt file (Ctrl+Shift+E)"
+                    onClicked: {
+                        if (!window.currentDoc || window.currentDoc.encrypted)
+                            return
+                        passphraseDialog.intent = "encrypt"
+                        passphraseDialog.promptNew(window.currentDoc.displayName)
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Label {
+                    text: "Language"
+                    color: Prefs.chromeText
+                    opacity: 0.7
+                    font.pixelSize: Math.max(10, Prefs.fontSize - 2)
+                }
+                ComboBox {
+                    id: languageCombo
+                    implicitHeight: 26
+                    Layout.preferredWidth: 150
+                    model: window.currentDoc ? window.currentDoc.availableLanguages : []
+                    textRole: "name"
+                    valueRole: "id"
+                    onActivated: if (window.currentDoc) window.currentDoc.language = currentValue
+                    Connections {
+                        target: window
+                        function onCurrentDocChanged() { languageCombo.syncFromDoc() }
+                    }
+                    function syncFromDoc() {
+                        if (!window.currentDoc)
+                            return
+                        currentIndex = indexOfValue(window.currentDoc.language)
+                    }
+                    Component.onCompleted: syncFromDoc()
+                    contentItem: Text {
+                        text: languageCombo.displayText
+                        color: Prefs.chromeText
+                        leftPadding: 8
+                        rightPadding: 20
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                        font.pixelSize: Math.max(10, Prefs.fontSize - 2)
+                    }
+                    background: Rectangle {
+                        color: Prefs.background
+                        border.color: Prefs.border
+                        radius: 3
+                    }
+                    delegate: ItemDelegate {
+                        width: languageCombo.width
+                        highlighted: languageCombo.highlightedIndex === index
+                        contentItem: Text {
+                            text: modelData.name
+                            color: Prefs.chromeText
+                            verticalAlignment: Text.AlignVCenter
+                            font.pixelSize: Math.max(10, Prefs.fontSize - 2)
+                        }
+                        background: Rectangle { color: highlighted ? Prefs.accent : Prefs.chrome }
+                    }
+                    popup: Popup {
+                        y: languageCombo.height
+                        width: languageCombo.width
+                        implicitHeight: Math.min(320, contentItem.implicitHeight)
+                        padding: 1
+                        contentItem: ListView {
+                            clip: true
+                            implicitHeight: contentHeight
+                            model: languageCombo.popup.visible ? languageCombo.delegateModel : null
+                            currentIndex: languageCombo.highlightedIndex
+                            ScrollIndicator.vertical: ScrollIndicator {}
+                        }
+                        background: Rectangle {
+                            color: Prefs.chrome
+                            border.color: Prefs.border
+                            radius: 3
+                        }
+                    }
+                }
+            }
+        }
+
+        // ----------------------------------------------------------- tabs
+        TabBar {
+            id: tabBar
+            Layout.fillWidth: true
+            currentIndex: Documents.currentIndex
+            onCurrentIndexChanged: Documents.currentIndex = currentIndex
+            background: Rectangle {
+                color: Prefs.chrome
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: 1
+                    color: Prefs.border
+                }
+            }
+
+            Repeater {
+                model: Documents
+                TabButton {
+                    id: tabButton
+                    required property int index
+                    required property string title
+                    required property bool modified
+                    required property bool encrypted
+
+                    implicitWidth: Math.min(220, Math.max(110, tabLabel.implicitWidth + 54))
+                    implicitHeight: 30
+
+                    contentItem: Item {
+                        Row {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 4
+                            Text {
+                                visible: tabButton.encrypted
+                                text: "\ud83d\udd12"
+                                color: Prefs.accent
+                                font.pixelSize: Math.max(10, Prefs.fontSize - 3)
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            Text {
+                                id: tabLabel
+                                text: (tabButton.modified ? "\u2022 " : "") + tabButton.title
+                                color: Prefs.chromeText
+                                opacity: tabButton.checked ? 1.0 : 0.65
+                                elide: Text.ElideMiddle
+                                font.pixelSize: Math.max(11, Prefs.fontSize - 1)
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                        BarButton {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 4
+                            anchors.verticalCenter: parent.verticalCenter
+                            implicitWidth: 18
+                            implicitHeight: 18
+                            text: "\u2715"
+                            onClicked: window.closeTab(tabButton.index)
+                        }
+                    }
+
+                    background: Rectangle {
+                        color: tabButton.checked ? Prefs.background
+                               : tabButton.hovered ? Prefs.border : "transparent"
+                        Rectangle {
+                            anchors.right: parent.right
+                            width: 1
+                            height: parent.height
+                            color: Prefs.border
+                        }
+                        Rectangle {
+                            anchors.top: parent.top
+                            width: parent.width
+                            height: 2
+                            color: tabButton.checked ? Prefs.accent : "transparent"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------- panes
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: 0
+
+        StackLayout {
+            id: stack
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: Documents.currentIndex
+
+            Repeater {
+                id: paneRepeater
+                model: Documents
+                EditorPane {
+                    required property var document
+                    required property int index
+                    doc: document
+                    docIndex: index
+                    onStatusChanged: status.refresh()
+                }
+            }
+        }
+
+        FindReplaceBar {
+            id: findBar
+            Layout.fillWidth: true
+            pane: window.currentPane
+            onToast: function (message) { status.flash(message) }
+            onClosed: if (window.currentPane) window.currentPane.focusEditor()
+        }
+
+        // --------------------------------------------------------- status
+        Rectangle {
+            id: status
+            Layout.fillWidth: true
+            visible: Prefs.showStatusBar
+            implicitHeight: 24
+            color: Prefs.chrome
+
+            property string message: ""
+            function flash(text) { message = text; flashTimer.restart() }
+            function refresh() { positionLabel.update() }
+
+            Timer {
+                id: flashTimer
+                interval: 3000
+                onTriggered: status.message = ""
+            }
+
+            Rectangle {
+                anchors.top: parent.top
+                width: parent.width
+                height: 1
+                color: Prefs.border
+            }
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                spacing: 14
+
+                Label {
+                    text: status.message
+                    color: Prefs.accent
+                    font.pixelSize: Math.max(10, Prefs.fontSize - 2)
+                    elide: Text.ElideRight
+                    Layout.maximumWidth: 320
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Label {
+                    id: positionLabel
+                    function update() {}
+                    text: {
+                        const pane = window.currentPane
+                        if (!pane)
+                            return ""
+                        const sel = pane.selectionLength
+                        return "Ln " + pane.currentLine + ", Col " + pane.currentColumn
+                                + (sel > 0 ? "  (" + sel + " selected)" : "")
+                    }
+                    color: Prefs.chromeText
+                    opacity: 0.8
+                    font.pixelSize: Math.max(10, Prefs.fontSize - 2)
+                }
+
+                StatusChip {
+                    text: window.currentDoc ? window.currentDoc.encoding.toUpperCase() : ""
+                    tip: "Character encoding"
+                }
+                StatusChip {
+                    text: window.currentDoc ? window.currentDoc.lineEnding.toUpperCase() : ""
+                    tip: "Line endings"
+                }
+                StatusChip {
+                    text: Prefs.insertSpaces ? "Spaces: " + Prefs.tabWidth : "Tabs: " + Prefs.tabWidth
+                    tip: "Indentation"
+                }
+                StatusChip {
+                    text: window.currentDoc && window.currentDoc.encrypted ? "\ud83d\udd12 Encrypted" : ""
+                    visible: text !== ""
+                    accented: true
+                    tip: "AES-256-GCM"
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------- shortcuts
+    Shortcut { sequences: [StandardKey.New]; onActivated: window.newFile() }
+    Shortcut { sequences: [StandardKey.Open]; onActivated: openDialog.open() }
+    Shortcut { sequences: [StandardKey.Save]; onActivated: window.saveCurrent() }
+    Shortcut { sequences: [StandardKey.SaveAs]; onActivated: { saveDialog.encrypting = false; saveDialog.open() } }
+    Shortcut { sequences: [StandardKey.Close]; onActivated: window.closeTab(Documents.currentIndex) }
+    Shortcut { sequences: [StandardKey.Quit]; onActivated: window.close() }
+    Shortcut { sequences: [StandardKey.Find]; onActivated: findBar.open(false) }
+    Shortcut { sequences: [StandardKey.Replace]; onActivated: findBar.open(true) }
+    Shortcut { sequences: [StandardKey.FindNext]; onActivated: findBar.findNext() }
+    Shortcut { sequences: [StandardKey.FindPrevious]; onActivated: findBar.findPrevious() }
+    Shortcut { sequences: [StandardKey.ZoomIn]; onActivated: Prefs.adjustFontSize(1) }
+    Shortcut { sequences: [StandardKey.ZoomOut]; onActivated: Prefs.adjustFontSize(-1) }
+    Shortcut { sequence: "Ctrl+0"; onActivated: Prefs.fontSize = 13 }
+    Shortcut { sequence: "Ctrl+G"; onActivated: gotoDialog.promptFor(
+                   window.currentPane ? window.currentPane.metrics.lineCount() : 1,
+                   window.currentPane ? window.currentPane.currentLine : 1) }
+    Shortcut { sequence: "Ctrl+D"; onActivated: window.runOp(TextOps.duplicateLines) }
+    Shortcut { sequence: "Ctrl+Shift+K"; onActivated: window.runOp(TextOps.deleteLines) }
+    Shortcut { sequence: "Alt+Up"; onActivated: window.runOp(TextOps.moveLinesUp) }
+    Shortcut { sequence: "Alt+Down"; onActivated: window.runOp(TextOps.moveLinesDown) }
+    Shortcut { sequence: "Ctrl+J"; onActivated: window.runOp(TextOps.joinLines) }
+    Shortcut { sequence: "Ctrl+,"; onActivated: prefsDialog.open() }
+    Shortcut {
+        sequence: "Ctrl+/"
+        onActivated: {
+            const pane = window.currentPane
+            if (!pane) return
+            pane.applySpan(TextOps.toggleComment(pane.editor.text, pane.editor.selectionStart,
+                                                 pane.editor.selectionEnd, window.currentDoc.language))
+        }
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+E"
+        onActivated: {
+            if (!window.currentDoc || window.currentDoc.encrypted) return
+            passphraseDialog.intent = "encrypt"
+            passphraseDialog.promptNew(window.currentDoc.displayName)
+        }
+    }
+    Shortcut { sequence: "Ctrl+Tab"
+        onActivated: Documents.currentIndex = (Documents.currentIndex + 1) % Documents.count }
+    Shortcut { sequence: "Ctrl+Shift+Tab"
+        onActivated: Documents.currentIndex =
+                     (Documents.currentIndex - 1 + Documents.count) % Documents.count }
+
+    // --------------------------------------------------------- drag & drop
+    DropArea {
+        anchors.fill: parent
+        onDropped: function (drop) {
+            if (drop.hasUrls)
+                window.openFiles(drop.urls)
+        }
+    }
+}

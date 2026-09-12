@@ -1,0 +1,32 @@
+[project]
+name = "cipherpad"
+version = "0.1.0"
+description = "Qt Quick (QML) text editor with passphrase-encrypted file support"
+readme = "README.md"
+authors = [
+    { name = "anusrnm"}
+]
+requires-python = ">=3.14"
+dependencies = [
+    "pyside6>=6.9",
+    "cryptography>=43",
+]
+
+[project.scripts]
+cipherpad = "cipherpad:main"
+
+[project.gui-scripts]
+cipherpad-gui = "cipherpad:main"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.2",
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["uv_build>=0.12.11,<0.13.0"]
+build-backend = "uv_build"
