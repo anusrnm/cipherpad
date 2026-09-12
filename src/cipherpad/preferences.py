@@ -172,6 +172,8 @@ DEFAULTS: dict[str, Any] = {
     "syntaxHighlighting": True,
     "showStatusBar": True,
     "showToolBar": True,
+    "showProjectExplorer": True,
+    "projectExplorerWidth": 220,
     "autoCloseBrackets": True,
     "matchBrackets": True,
     "showWhitespace": False,
@@ -236,6 +238,8 @@ class Preferences(QObject):
     syntaxHighlightingChanged = Signal()
     showStatusBarChanged = Signal()
     showToolBarChanged = Signal()
+    showProjectExplorerChanged = Signal()
+    projectExplorerWidthChanged = Signal()
     autoCloseBracketsChanged = Signal()
     matchBracketsChanged = Signal()
     showWhitespaceChanged = Signal()
@@ -290,6 +294,7 @@ class Preferences(QObject):
             self._values[key] = self._read(key, default)
         self._recent_files: list[str] = self._read_list("recentFiles")
         self._session_files: list[str] = self._read_list("sessionFiles")
+        self._project_folders: list[str] = self._read_list("projectFolders")
 
     # ------------------------------------------------------------------ io
     def _read(self, key: str, default: Any) -> Any:
@@ -337,6 +342,8 @@ class Preferences(QObject):
     syntaxHighlighting = _prop("syntaxHighlighting", bool, syntaxHighlightingChanged)
     showStatusBar = _prop("showStatusBar", bool, showStatusBarChanged)
     showToolBar = _prop("showToolBar", bool, showToolBarChanged)
+    showProjectExplorer = _prop("showProjectExplorer", bool, showProjectExplorerChanged)
+    projectExplorerWidth = _prop("projectExplorerWidth", int, projectExplorerWidthChanged)
     autoCloseBrackets = _prop("autoCloseBrackets", bool, autoCloseBracketsChanged)
     matchBrackets = _prop("matchBrackets", bool, matchBracketsChanged)
     showWhitespace = _prop("showWhitespace", bool, showWhitespaceChanged)
@@ -460,6 +467,15 @@ class Preferences(QObject):
     @Slot(result="QStringList")
     def sessionFiles(self) -> list[str]:
         return list(self._session_files)
+
+    @Slot("QStringList")
+    def saveProjectFolders(self, paths: list[str]) -> None:
+        self._project_folders = [p for p in paths if p]
+        self._write_list("projectFolders", self._project_folders)
+
+    @Slot(result="QStringList")
+    def projectFolders(self) -> list[str]:
+        return list(self._project_folders)
 
     @Slot()
     def sync(self) -> None:

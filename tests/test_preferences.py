@@ -265,3 +265,23 @@ def test_corrupt_list_setting_is_ignored(prefs: Preferences) -> None:
     prefs._settings.setValue("recentFiles", "{not json")
     prefs._settings.sync()
     assert reopen().recentFiles == []
+
+
+# ----------------------------------------------------------- project explorer
+def test_project_explorer_prefs_defaults(prefs: Preferences) -> None:
+    assert prefs.showProjectExplorer is True
+    assert prefs.projectExplorerWidth == 220
+    assert prefs.projectFolders() == []
+
+
+def test_project_explorer_prefs_persist(prefs: Preferences) -> None:
+    prefs.showProjectExplorer = False
+    prefs.projectExplorerWidth = 300
+    prefs.saveProjectFolders(["/path/one", "/path/two"])
+    prefs.sync()
+
+    restored = reopen()
+    assert restored.showProjectExplorer is False
+    assert restored.projectExplorerWidth == 300
+    assert restored.projectFolders() == ["/path/one", "/path/two"]
+

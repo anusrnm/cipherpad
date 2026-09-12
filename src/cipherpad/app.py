@@ -11,7 +11,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
 # Importing these registers the @QmlElement types with the Cipherpad module.
-from . import crypto, document, gutter, highlighter, preferences, search, textops  # noqa: F401
+from . import crypto, document, explorer, gutter, highlighter, preferences, search, textops  # noqa: F401
 
 ORGANISATION = "Cipherpad"
 APPLICATION = "Cipherpad"
@@ -42,6 +42,7 @@ def run(argv: list[str] | None = None) -> int:
     search_engine = search.SearchEngine()
     text_ops = textops.TextOps()
     crypto_info = crypto.CryptoInfo()
+    project_explorer = explorer.ProjectExplorer()
     engine = QQmlApplicationEngine()
 
     context = engine.rootContext()
@@ -50,6 +51,7 @@ def run(argv: list[str] | None = None) -> int:
     context.setContextProperty("Search", search_engine)
     context.setContextProperty("TextOps", text_ops)
     context.setContextProperty("Crypto", crypto_info)
+    context.setContextProperty("Explorer", project_explorer)
     context.setContextProperty("appVersion", QCoreApplication.applicationVersion())
 
     engine.addImportPath(str(QML_DIR))
@@ -58,16 +60,26 @@ def run(argv: list[str] | None = None) -> int:
         print("Failed to load QML interface.", file=sys.stderr)
         return 1
 
+    if prefs.restoreSession:
+        project_explorer.loadFolders(prefs.projectFolders())
+
     paths = [str(Path(arg).resolve()) for arg in argv if not arg.startswith("-")]
-    if paths:
-        manager.openMany(paths)
+    folder_paths = [p for p in paths if Path(p).is_dir()]
+    file_paths = [p for p in paths if not Path(p).is_dir()]
+
+    for folder in folder_paths:
+        project_explorer.addFolder(folder)
+
+    if file_paths:
+        manager.openMany(file_paths)
     elif prefs.restoreSession and manager.openMany(prefs.sessionFiles()):
         pass
-    else:
+    elif not folder_paths:
         manager.newDocument()
 
     exit_code = app.exec()
     prefs.saveSession(manager.openPaths())
+    prefs.saveProjectFolders(project_explorer.openFolders())
     prefs.sync()
     return exit_code
 
