@@ -10,6 +10,8 @@ Item {
     required property var doc          // Document instance from DocumentManager
     required property int docIndex
     required property var prettyPrintAction
+    property var safetyTools: null
+    property var lockAction: null
 
     readonly property alias editor: editor
     readonly property alias metrics: metrics
@@ -19,11 +21,15 @@ Item {
     property var cursorInfo: ({ line: 1, column: 1, lineStart: 0 })
 
     signal statusChanged()
+    signal activated()
+    signal externalChangeRequested()
 
     // ------------------------------------------------------------ editing
     // Every backend command returns {start, end, text, selectionStart,
     // selectionEnd, changed}; applying it through metrics keeps undo atomic.
     function applySpan(span) {
+        if (pane.doc && pane.doc.locked)
+            return false
         if (!span || !span.changed)
             return false
         metrics.replaceRange(span.start, span.end, span.text)
@@ -38,6 +44,18 @@ Item {
     function selStart() { return editor.selectionStart }
     function selEnd() { return editor.selectionEnd }
     function focusEditor() { editor.forceActiveFocus() }
+
+    function copySelection(cut) {
+        if (!pane.doc || pane.doc.locked || pane.selectionLength === 0)
+            return
+        if (safetyTools) {
+            if (!safetyTools.copyText(editor.selectedText, pane.doc.encrypted, Prefs.clipboardExpirySeconds))
+                return
+        } else
+            editor.copy()
+        if (cut && !editor.readOnly)
+            metrics.replaceRange(editor.selectionStart, editor.selectionEnd, "")
+    }
 
     function goToLine(line) {
         editor.cursorPosition = metrics.positionForLine(line)
@@ -103,8 +121,13 @@ Item {
 
     Connections {
         target: pane.doc
-        function onContentLoaded(text) { pane.adoptContent(text) }
+        function onContentLoaded(text) {
+            const modified = pane.doc.modified
+            pane.adoptContent(text)
+            pane.doc.modified = modified
+        }
         function onLanguageChanged() { highlighter.language = pane.doc.language }
+        function onExternallyChanged() { if (!pane.doc.locked) pane.externalChangeRequested() }
     }
 
     // Tracks the text last known to correspond to the document's on-disk /
@@ -117,6 +140,7 @@ Item {
     property string _lastKnownText: ""
 
     function adoptContent(text) {
+        metrics.clearBookmarks()
         editor.text = text
         editor.cursorPosition = 0
         pane._lastKnownText = text
@@ -130,9 +154,11 @@ Item {
         applyPalette()
         // Content loaded before this pane existed is buffered on the document.
         const buffered = pane.doc ? pane.doc.takeContent() : ""
-        if (buffered.length > 0)
+        if (buffered.length > 0) {
+            const modified = pane.doc.modified
             adoptContent(buffered)
-        else
+            pane.doc.modified = modified
+        } else
             updateCursorInfo()
     }
 
@@ -156,6 +182,10 @@ Item {
                 onLineClicked: function (line) {
                     editor.select(metrics.positionForLine(line), metrics.lineEndPosition(line))
                     pane.focusEditor()
+                }
+                onBookmarkRequested: function(line) {
+                    if (!pane.doc.locked)
+                        metrics.toggleBookmark(line)
                 }
             }
 
@@ -197,7 +227,7 @@ Item {
                     persistentSelection: true
                     textFormat: TextEdit.PlainText
                     wrapMode: Prefs.wordWrap ? TextEdit.WrapAtWordBoundaryOrAnywhere : TextEdit.NoWrap
-                    readOnly: pane.doc ? pane.doc.readOnly : false
+                    readOnly: pane.doc ? pane.doc.readOnly || pane.doc.locked : false
                     leftPadding: 8
                     rightPadding: 8
                     topPadding: 6
@@ -214,13 +244,14 @@ Item {
                     onTextChanged: {
                         if (editor.text !== pane._lastKnownText) {
                             pane._lastKnownText = editor.text
-                            if (pane.doc)
+                            if (pane.doc && !pane.doc.locked)
                                 pane.doc.modified = true
                         }
                         gutter.refresh()
                     }
                     onCursorPositionChanged: pane.updateCursorInfo()
                     onSelectedTextChanged: pane.statusChanged()
+                    onActiveFocusChanged: if (activeFocus) pane.activated()
 
                     // current-line band, drawn behind the glyphs
                     Rectangle {
@@ -267,9 +298,9 @@ Item {
                             onTriggered: editor.redo() }
                         MenuSeparator {}
                         AppMenuItem { text: "Cut"; shortcutText: "Ctrl+X"; enabled: pane.selectionLength > 0 && !editor.readOnly
-                            onTriggered: editor.cut() }
+                            onTriggered: pane.copySelection(true) }
                         AppMenuItem { text: "Copy"; shortcutText: "Ctrl+C"; enabled: pane.selectionLength > 0
-                            onTriggered: editor.copy() }
+                            onTriggered: pane.copySelection(false) }
                         AppMenuItem { text: "Paste"; shortcutText: "Ctrl+V"; enabled: editor.canPaste && !editor.readOnly
                             onTriggered: editor.paste() }
                         AppMenuItem { text: "Select All"; shortcutText: "Ctrl+A"; onTriggered: editor.selectAll() }
@@ -278,6 +309,11 @@ Item {
                             objectName: "prettyPrintContextItem"
                             action: pane.prettyPrintAction
                             shortcutText: "Ctrl+Shift+P"
+                        }
+                        AppMenuItem {
+                            action: pane.lockAction
+                            visible: pane.lockAction !== null
+                            shortcutText: "Ctrl+Alt+L"
                         }
                     }
                 }
@@ -306,6 +342,13 @@ Item {
 
     // --------------------------------------------------------- key handling
     function handleKey(event) {
+        if (event.matches(StandardKey.Copy) || event.matches(StandardKey.Cut)) {
+            event.accepted = true
+            pane.copySelection(event.matches(StandardKey.Cut))
+            return
+        }
+        if (pane.doc && pane.doc.locked)
+            return
         const tabWidth = Prefs.tabWidth
         const useSpaces = Prefs.insertSpaces
         const hasSelection = editor.selectionStart !== editor.selectionEnd
@@ -359,6 +402,8 @@ Item {
     }
 
     function insertAtCursor(text) {
+        if (pane.doc && pane.doc.locked)
+            return
         const from = editor.selectionStart
         metrics.replaceRange(from, editor.selectionEnd, text)
         editor.cursorPosition = from + text.length
@@ -369,5 +414,24 @@ Item {
     WheelHandler {
         acceptedModifiers: Qt.ControlModifier
         onWheel: function (event) { Prefs.adjustFontSize(event.angleDelta.y > 0 ? 1 : -1) }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        visible: pane.doc && pane.doc.locked
+        color: Prefs.background
+        Column {
+            anchors.centerIn: parent
+            spacing: 12
+            Label { text: "Encrypted tab locked"; color: Prefs.chromeText }
+            BarButton {
+                text: "Unlock..."
+                wide: true
+                onClicked: if (pane.lockAction) {
+                    pane.activated()
+                    pane.lockAction.trigger()
+                }
+            }
+        }
     }
 }

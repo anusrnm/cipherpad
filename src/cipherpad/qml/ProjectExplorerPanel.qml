@@ -13,6 +13,24 @@ Rectangle {
     signal openFileRequested(string path)
     property string selectedPath: ""
     property bool selectedIsDir: false
+    property var selectedFiles: []
+    readonly property bool treeFocused: treeView.activeFocus
+    signal compareFilesRequested(var paths)
+
+    function selectPath(path, isDir, toggle) {
+        selectedPath = path
+        selectedIsDir = isDir
+        if (isDir)
+            selectedFiles = []
+        else if (toggle)
+            selectedFiles = selectedFiles.includes(path) ? selectedFiles.filter(item => item !== path) : selectedFiles.concat([path])
+        else
+            selectedFiles = [path]
+        treeView.forceActiveFocus()
+    }
+    function compareSelected() {
+        compareFilesRequested(selectedFiles)
+    }
     readonly property string targetDirectory: selectedPath
         ? (selectedIsDir ? selectedPath : Explorer.parentDirectory(selectedPath))
         : (Explorer.rootFolders.length > 0 ? Explorer.rootFolders[0] : "")
@@ -35,7 +53,16 @@ Rectangle {
     Connections {
         target: Explorer
         function onOptionsChanged() { filenameFilter.text = "" }
-        function onRootFoldersChanged() { filenameFilter.text = "" }
+        function onRootFoldersChanged() { filenameFilter.text = ""; root.selectedFiles = [] }
+        function onCountChanged() {
+            const visibleFiles = []
+            for (let i = 0; i < Explorer.count; ++i) {
+                const item = Explorer.itemAt(i)
+                if (!item.isDir)
+                    visibleFiles.push(item.path)
+            }
+            root.selectedFiles = root.selectedFiles.filter(path => visibleFiles.includes(path))
+        }
     }
     Timer {
         id: filterDelay
@@ -336,7 +363,7 @@ Rectangle {
                                                       && window.currentDoc.filePath === path
                 readonly property bool rowHovered: rowHover.hovered
 
-                color: rowHovered ? (isCurrentFile ? Prefs.selection : Prefs.border)
+                color: root.selectedFiles.includes(path) ? Prefs.selection : rowHovered ? (isCurrentFile ? Prefs.selection : Prefs.border)
                        : isCurrentFile ? Prefs.selection
                        : "transparent"
                 opacity: isCurrentFile && !rowHovered ? 0.45 : (rowHovered ? 0.7 : 1.0)
@@ -349,16 +376,20 @@ Rectangle {
                 // button) sit on top and receive their own clicks.
                 MouseArea {
                     id: delegateMouse
+                    objectName: "explorerRow:" + delegateItem.path
                     anchors.fill: parent
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
 
                     onClicked: function (mouse) {
-                        root.selectedPath = delegateItem.path
-                        root.selectedIsDir = delegateItem.isDir
+                        const toggle = (mouse.modifiers & Qt.ControlModifier) !== 0
+                        if (mouse.button !== Qt.RightButton || !root.selectedFiles.includes(delegateItem.path))
+                            root.selectPath(delegateItem.path, delegateItem.isDir, toggle)
+                        else
+                            treeView.forceActiveFocus()
                         if (mouse.button === Qt.LeftButton) {
                             if (delegateItem.isDir) {
                                 Explorer.toggleExpanded(delegateItem.path)
-                            } else {
+                            } else if (!toggle) {
                                 root.openFileRequested(delegateItem.path)
                             }
                         } else if (mouse.button === Qt.RightButton) {
@@ -429,6 +460,13 @@ Rectangle {
 
                     // Hidden menu entries still occupy space in a Menu, so
                     // conditional entries collapse their height when hidden.
+                    AppMenuItem {
+                        objectName: "explorerCompareItem"
+                        text: "Compare Selected Files"
+                        shortcutText: "Ctrl+D"
+                        enabled: root.selectedFiles.length === 2
+                        onTriggered: root.compareSelected()
+                    }
                     AppMenuItem {
                         text: "Open"
                         visible: !delegateItem.isDir

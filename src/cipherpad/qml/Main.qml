@@ -16,12 +16,185 @@ ApplicationWindow {
             : "") + "Cipherpad"
 
     readonly property var currentDoc: Documents.currentDocument
-    readonly property var currentPane: Documents.count >= 0 ? paneRepeater.itemAt(Documents.currentIndex) : null
+    readonly property var currentPane: currentDoc && currentDoc.locked ? null : (Documents.count >= 0 ? paneRepeater.itemAt(Documents.currentIndex) : null)
     readonly property alias prettyPrintCommand: prettyPrintAction
     property int pendingCloseIndex: -1
     property string pendingAction: ""
     property var pendingPaths: []
-    readonly property bool editableDocument: currentPane !== null && currentDoc !== null && !currentDoc.readOnly
+    property bool splitEditors: false
+    property var leftDocument: null
+    property var rightDocument: null
+    property int activeSide: 0
+    property real splitRatio: 0.5
+    property bool showMarkdownPreview: false
+    readonly property bool unlockedDocument: currentDoc !== null && !currentDoc.locked
+    readonly property alias tabLockCommand: lockTabAction
+    property bool showConsole: false
+
+    CommandConsole {
+        id: commandConsole
+        objectName: "commandConsole"
+        onErrorOccurred: function(message) { messageDialog.show(message) }
+    }
+    GitTools {
+        id: gitTools
+        objectName: "gitTools"
+        onErrorOccurred: function(message) { messageDialog.show(message) }
+        onOperationCompleted: function(message) { status.flash(message) }
+        onDiffReady: function(diff, path) {
+            comparisonDialog.heading = "Git Diff: " + path
+            comparisonDialog.showComparison({diff: diff, left: "", right: "", leftName: "Git", rightName: path, equal: diff === "", unifiedOnly: true}, null, false)
+        }
+    }
+    function workingDirectory() {
+        if (currentDoc && currentDoc.filePath)
+            return Explorer.parentDirectory(currentDoc.filePath)
+        return Explorer.rootFolders.length ? Explorer.rootFolders[0] : commandConsole.homeDirectory
+    }
+    function toggleConsole() {
+        showConsole = !showConsole
+        if (showConsole)
+            consolePanel.showFor(workingDirectory())
+        else if (currentPane)
+            currentPane.focusEditor()
+    }
+    function navigateBookmark(previous) {
+        if (!currentPane)
+            return
+        const line = currentPane.metrics.adjacentBookmark(currentPane.currentLine, previous)
+        if (line)
+            currentPane.goToLine(line)
+        else
+            status.flash("No bookmarks in this tab")
+    }
+    function compareExplorerFiles(paths) {
+        if (paths.length !== 2) {
+            messageDialog.show("Select exactly two files in the explorer using Ctrl-click.")
+            return
+        }
+        const left = Inspection.readFile(paths[0])
+        const right = Inspection.readFile(paths[1])
+        if (left.error || right.error) {
+            messageDialog.show(left.error || right.error)
+            return
+        }
+        showComparison(left.text, right.text, paths[0], paths[1], false)
+    }
+    GitPanel {
+        id: gitPanel
+        git: gitTools
+        onFileRequested: function(path) { window.openFiles([path]) }
+    }
+
+    SafetyTools {
+        id: safety
+        objectName: "safetyTools"
+        onErrorOccurred: function(message) { messageDialog.show(message) }
+    }
+    Connections {
+        target: Prefs
+        function onRecoveryEnabledChanged() { window.captureRecovery() }
+    }
+    Timer {
+        interval: 30000
+        repeat: true
+        running: true
+        onTriggered: window.captureRecovery()
+    }
+    function captureRecovery() {
+        for (let i = 0; i < Documents.count; ++i) {
+            const pane = paneAt(i)
+            if (pane)
+                safety.snapshot(pane.doc, pane.editor.text, Prefs.recoveryEnabled)
+        }
+    }
+    function showRecovery() {
+        recoveryDialog.entries = safety.availableRecovery()
+        if (recoveryDialog.entries.length)
+            recoveryDialog.open()
+        else
+            status.flash("No interrupted-session recovery snapshots")
+    }
+    function resolveRecoveryEntry(identifier, restore) {
+        safety.resolveRecovery(identifier, Documents, restore)
+        recoveryDialog.entries = safety.availableRecovery()
+        if (!recoveryDialog.entries.length)
+            recoveryDialog.close()
+    }
+    function toggleTabLock() {
+        if (!currentDoc || !currentDoc.encrypted)
+            return
+        if (currentDoc.locked) {
+            unlockTabDialog.document = currentDoc
+            unlockTabDialog.promptUnlock(currentDoc.displayName, "")
+            return
+        }
+        comparisonDialog.close()
+        validationDialog.close()
+        jsonTreeDialog.close()
+        reloadConfirm.close()
+        compareTabDialog.close()
+        compareFileDialog.close()
+        saveDialog.close()
+        passphraseDialog.close()
+        findBar.clearSensitive()
+        showMarkdownPreview = false
+        messageDialog.close()
+        messageDialog.message = ""
+        currentDoc.lock(currentPane.editor.text)
+    }
+    Action {
+        id: lockTabAction
+        objectName: "lockTabAction"
+        text: window.currentDoc && window.currentDoc.locked ? "Unlock Tab..." : "Lock Encrypted Tab"
+        shortcut: "Ctrl+Alt+L"
+        enabled: window.currentDoc !== null && window.currentDoc.encrypted
+        onTriggered: window.toggleTabLock()
+    }
+
+    function containsDocument(document) {
+        for (let i = 0; i < Documents.count; ++i)
+            if (Documents.documentAt(i) === document)
+                return true
+        return false
+    }
+
+    function toggleSplit() {
+        if (splitEditors) {
+            splitEditors = false
+            leftDocument = null
+            rightDocument = null
+            return
+        }
+        if (!currentDoc)
+            newFile()
+        const original = currentDoc
+        let other = null
+        for (let i = 0; i < Documents.count; ++i)
+            if (Documents.documentAt(i) !== original) {
+                other = Documents.documentAt(i)
+                break
+            }
+        if (!other) {
+            const index = Documents.newDocument()
+            other = Documents.documentAt(index)
+            Documents.currentIndex = paneIndex(original)
+        }
+        leftDocument = original
+        rightDocument = other
+        activeSide = 0
+        splitEditors = true
+        if (currentPane)
+            currentPane.focusEditor()
+    }
+
+    function paneIndex(document) {
+        for (let i = 0; i < Documents.count; ++i)
+            if (Documents.documentAt(i) === document)
+                return i
+        return -1
+    }
+    readonly property bool editableDocument: currentPane !== null && unlockedDocument && !currentDoc.readOnly
 
     Action {
         id: quickOpenAction
@@ -52,6 +225,7 @@ ApplicationWindow {
         shortcut: "Ctrl+Shift+P"
         enabled: window.currentPane !== null && window.currentDoc !== null
                  && !window.currentDoc.readOnly
+                 && !window.currentDoc.locked
                  && (window.currentDoc.language === "json" || window.currentDoc.language === "xml")
         onTriggered: window.prettyPrint()
     }
@@ -71,13 +245,20 @@ ApplicationWindow {
             showMaximized()
         else
             show()
+        Qt.callLater(function() {
+            recoveryDialog.entries = safety.availableRecovery()
+            if (recoveryDialog.entries.length)
+                recoveryDialog.open()
+        })
     }
 
     onClosing: function (close) {
-        if (Documents.hasModifiedDocuments && pendingAction !== "quit") {
+        if (Documents.hasModifiedDocuments) {
             close.accepted = false
-            pendingAction = "quit"
-            unsavedDialog.openFor(-1)
+            if (!unsavedDialog.visible) {
+                pendingAction = "quit"
+                unsavedDialog.openFor(-1)
+            }
         }
     }
 
@@ -125,8 +306,11 @@ ApplicationWindow {
     }
 
     function saveCurrent() {
-        if (!currentDoc)
+        if (!unlockedDocument) {
+            if (currentDoc && currentDoc.locked)
+                messageDialog.show("Unlock this tab before saving.")
             return false
+        }
         if (currentDoc.isUntitled) {
             saveDialog.open()
             return false
@@ -144,7 +328,7 @@ ApplicationWindow {
     // undoable and the editor stays in sync with what hits the disk.
     function preparedText() {
         const pane = currentPane
-        if (!pane)
+        if (!pane || !unlockedDocument)
             return ""
         if (Prefs.trimTrailingWhitespaceOnSave) {
             const span = TextOps.trimTrailingWhitespace(pane.editor.text, 0, pane.editor.text.length)
@@ -160,6 +344,10 @@ ApplicationWindow {
 
     function closeTab(index) {
         const doc = Documents.documentAt(index)
+        if (doc && doc.pinned) {
+            status.flash("Unpin this tab before closing it")
+            return
+        }
         if (doc && doc.modified) {
             pendingAction = "close"
             unsavedDialog.openFor(index)
@@ -170,7 +358,7 @@ ApplicationWindow {
 
     function runOp(fn) {
         const pane = currentPane
-        if (!pane)
+        if (!pane || !editableDocument)
             return
         pane.applySpan(fn(pane.editor.text, pane.editor.selectionStart, pane.editor.selectionEnd))
         pane.focusEditor()
@@ -192,8 +380,72 @@ ApplicationWindow {
         pane.focusEditor()
     }
 
+    function comparePaneWithDisk(pane, external) {
+        if (!pane || !pane.doc || pane.doc.locked)
+            return
+        const snapshot = pane.doc.diskSnapshot()
+        if (snapshot.error) {
+            messageDialog.show(snapshot.error)
+            return
+        }
+        const result = Inspection.compare(snapshot.text, pane.editor.text,
+                                          pane.doc.displayName + " (disk)", pane.doc.displayName + " (editor)")
+        if (result.error) {
+            messageDialog.show(result.error)
+            return
+        }
+        if (external && result.equal)
+            return
+        comparisonDialog.heading = external ? "External Change Detected" : "Compare with Disk"
+        comparisonDialog.showComparison(result, pane.doc, true)
+    }
+
+    function showComparison(left, right, leftName, rightName, otherEncrypted) {
+        const result = Inspection.compare(left, right, leftName, rightName)
+        result.sensitive = (currentDoc && currentDoc.encrypted) || otherEncrypted === true
+        if (result.error)
+            messageDialog.show(result.error)
+        else {
+            comparisonDialog.heading = "Compare Files"
+            comparisonDialog.showComparison(result, null, false)
+        }
+    }
+
+    function requestReload(document) {
+        if (!document || document.locked || !containsDocument(document))
+            return
+        if (document.modified) {
+            reloadConfirm.document = document
+            reloadConfirm.open()
+        } else
+            document.reload()
+    }
+
+    function showJsonTree() {
+        if (!currentPane || !unlockedDocument)
+            return
+        const result = Inspection.jsonTree(currentPane.editor.text)
+        if (result.error)
+            messageDialog.show(result.error)
+        else
+            jsonTreeDialog.showTree(result, currentDoc.encrypted)
+    }
+
     function runCommand(command) {
+        if (currentDoc && currentDoc.locked && ["save", "pretty", "undo", "redo", "upper", "lower", "trim", "unique", "reverse", "diskDiff", "fileDiff", "tabDiff", "validate", "jsonTree", "markdown"].includes(command)) {
+            messageDialog.show("Unlock this tab before using this command.")
+            return
+        }
         switch (command) {
+        case "console": toggleConsole(); break
+        case "git": gitPanel.showFor(workingDirectory()); break
+        case "pin": if (currentDoc) currentDoc.pinned = !currentDoc.pinned; break
+        case "bookmark": if (currentPane) currentPane.metrics.toggleBookmark(currentPane.currentLine); break
+        case "nextBookmark": navigateBookmark(false); break
+        case "previousBookmark": navigateBookmark(true); break
+        case "clearBookmarks": if (currentPane) currentPane.metrics.clearBookmarks(); break
+        case "lock": toggleTabLock(); break
+        case "recovery": showRecovery(); break
         case "new": newFile(); break
         case "open": openDialog.open(); break
         case "folder": openFolderDialog.open(); break
@@ -221,6 +473,13 @@ ApplicationWindow {
         case "zoomIn": Prefs.adjustFontSize(1); break
         case "zoomOut": Prefs.adjustFontSize(-1); break
         case "about": aboutDialog.open(); break
+        case "split": toggleSplit(); break
+        case "diskDiff": comparePaneWithDisk(currentPane, false); break
+        case "fileDiff": compareFileDialog.open(); break
+        case "tabDiff": compareTabDialog.open(); break
+        case "validate": validationDialog.showFor(currentPane); break
+        case "jsonTree": showJsonTree(); break
+        case "markdown": showMarkdownPreview = !showMarkdownPreview; break
         default: messageDialog.show("Unknown command: " + command)
         }
     }
@@ -228,6 +487,15 @@ ApplicationWindow {
     WorkspacePicker {
         id: workspacePicker
         commands: [
+            {command: "console", label: "View: Command Console (Ctrl+`)"},
+            {command: "git", label: "Tools: Local Git (Ctrl+Alt+G)"},
+            {command: "pin", label: "Tabs: Pin / Unpin Tab", enabled: window.currentDoc !== null},
+            {command: "bookmark", label: "Bookmarks: Toggle (Ctrl+F2)", enabled: window.currentPane !== null},
+            {command: "nextBookmark", label: "Bookmarks: Next (F2)", enabled: window.currentPane !== null},
+            {command: "previousBookmark", label: "Bookmarks: Previous (Shift+F2)", enabled: window.currentPane !== null},
+            {command: "clearBookmarks", label: "Bookmarks: Clear Tab Bookmarks", enabled: window.currentPane !== null},
+            {command: "lock", label: "Security: Lock / Unlock Tab (Ctrl+Alt+L)", enabled: lockTabAction.enabled},
+            {command: "recovery", label: "File: Recover Interrupted Session"},
             {command: "new", label: "File: New (Ctrl+N)"},
             {command: "open", label: "File: Open (Ctrl+O)"},
             {command: "folder", label: "Workspace: Add Folder (Ctrl+Shift+O)"},
@@ -254,7 +522,14 @@ ApplicationWindow {
             {command: "hidden", label: "Workspace: Toggle Hidden Files"},
             {command: "zoomIn", label: "View: Zoom In"},
             {command: "zoomOut", label: "View: Zoom Out"},
-            {command: "about", label: "Help: About"}
+            {command: "about", label: "Help: About"},
+            {command: "split", label: "View: Toggle Split Editors (Ctrl+Alt+S)"},
+            {command: "diskDiff", label: "Compare: Editor with Disk", enabled: window.currentDoc !== null && !window.currentDoc.isUntitled},
+            {command: "fileDiff", label: "Compare: With File", enabled: window.currentPane !== null},
+            {command: "tabDiff", label: "Compare: With Open Tab", enabled: Documents.count > 1},
+            {command: "validate", label: "Tools: Validate JSON / XML", enabled: window.currentDoc !== null && ["json", "xml"].includes(window.currentDoc.language)},
+            {command: "jsonTree", label: "View: JSON Tree", enabled: window.currentDoc !== null && window.currentDoc.language === "json"},
+            {command: "markdown", label: "View: Markdown Preview", enabled: window.currentDoc !== null && window.currentDoc.language === "markdown"}
         ]
         onFileRequested: function(path) { window.openFiles([path]) }
         onCommandRequested: function(command) { window.runCommand(command) }
@@ -283,6 +558,73 @@ ApplicationWindow {
     }
 
     // ------------------------------------------------------------- dialogs
+    ComparisonDialog {
+        safetyTools: safety
+        id: comparisonDialog
+        onReloadRequested: function(document) { window.requestReload(document) }
+    }
+    ValidationDialog { id: validationDialog }
+    JsonTreeDialog { id: jsonTreeDialog; safetyTools: safety }
+    AppDialog {
+        id: reloadConfirm
+        objectName: "reloadConfirmDialog"
+        heading: "Discard edits and reload?"
+        property var document: null
+        standardButtons: Dialog.Discard | Dialog.Cancel
+        Label {
+            width: parent.width
+            text: "Reloading will discard unsaved edits in " + (reloadConfirm.document ? reloadConfirm.document.displayName : "") + "."
+            color: Prefs.chromeText
+            wrapMode: Text.Wrap
+        }
+        onDiscarded: {
+            if (window.containsDocument(document))
+                document.reload()
+            close()
+        }
+        onClosed: document = null
+    }
+    FileDialog {
+        id: compareFileDialog
+        title: "Compare current editor with a file"
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            if (!window.currentPane)
+                return
+            const snapshot = Inspection.readFile(String(selectedFile))
+            if (snapshot.error)
+                messageDialog.show(snapshot.error)
+            else
+                window.showComparison(window.currentPane.editor.text, snapshot.text,
+                                      window.currentDoc.displayName + " (editor)", String(selectedFile))
+        }
+    }
+    AppDialog {
+        id: compareTabDialog
+        objectName: "compareTabDialog"
+        heading: "Compare with Open Tab"
+        standardButtons: Dialog.Close
+        width: 440
+        height: Math.min(480, parent.height - 40)
+        ListView {
+            anchors.fill: parent
+            model: Documents
+            clip: true
+            delegate: ItemDelegate {
+                required property var document
+                required property int index
+                width: ListView.view.width
+                enabled: document !== window.currentDoc && !document.locked && window.unlockedDocument
+                contentItem: Label { text: document.displayName; color: Prefs.chromeText }
+                onClicked: {
+                    const other = window.paneAt(index)
+                    window.showComparison(window.currentPane.editor.text, other.editor.text,
+                                          window.currentDoc.displayName + " (editor)", document.displayName + " (editor)", document.encrypted)
+                    compareTabDialog.close()
+                }
+            }
+        }
+    }
     FileDialog {
         id: openDialog
         title: "Open files"
@@ -309,6 +651,10 @@ ApplicationWindow {
         nameFilters: ["All files (*)", "Text files (*.txt)", "Encrypted files (*.enc)"]
         property bool encrypting: false
         onAccepted: {
+            if (!window.unlockedDocument) {
+                messageDialog.show("Unlock the tab before saving.")
+                return
+            }
             const path = String(selectedFile).replace(/^file:\/{3}/, "")
             if (encrypting) {
                 passphraseDialog.pendingPath = path
@@ -326,12 +672,88 @@ ApplicationWindow {
     }
 
     PassphraseDialog {
+        id: unlockTabDialog
+        objectName: "unlockTabDialog"
+        property var document: null
+        onPassphraseAccepted: function(passphrase) {
+            if (document && window.containsDocument(document)) {
+                if (!document.unlock(passphrase))
+                    promptUnlock(document.displayName, "Wrong passphrase, or the locked buffer is damaged.")
+                else {
+                    document = null
+                    if (window.currentPane)
+                        window.currentPane.focusEditor()
+                }
+            }
+        }
+        onRejected: document = null
+    }
+
+    AppDialog {
+        id: recoveryDialog
+        objectName: "recoveryDialog"
+        heading: "Interrupted Session Recovery"
+        width: 540
+        standardButtons: Dialog.Close
+        property var entries: []
+        ColumnLayout {
+            width: parent.width
+            Label {
+                Layout.fillWidth: true
+                text: "Ordinary-tab snapshots contain plaintext. Restore creates an unsaved recovered tab; the original file is never overwritten. Encrypted tabs are excluded."
+                wrapMode: Text.Wrap
+                color: Prefs.chromeText
+            }
+            Repeater {
+                model: recoveryDialog.entries
+                RowLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Label {
+                        Layout.fillWidth: true
+                        text: modelData.title + (modelData.error ? ": " + modelData.error : "")
+                        wrapMode: Text.Wrap
+                        color: Prefs.chromeText
+                    }
+                    BarButton {
+                        objectName: "recoveryRestoreButton"
+                        text: "Restore"
+                        wide: true
+                        enabled: !modelData.error
+                        onClicked: window.resolveRecoveryEntry(modelData.id, true)
+                    }
+                    BarButton {
+                        text: "Discard"
+                        wide: true
+                        onClicked: {
+                            recoveryDiscard.identifier = modelData.id
+                            recoveryDiscard.open()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    AppDialog {
+        id: recoveryDiscard
+        heading: "Discard recovery snapshot?"
+        standardButtons: Dialog.Yes | Dialog.No
+        property string identifier: ""
+        Label { text: "This permanently removes the selected recovery snapshot."; color: Prefs.chromeText }
+        onAccepted: {
+            window.resolveRecoveryEntry(identifier, false)
+        }
+    }
+
+    PassphraseDialog {
         id: passphraseDialog
         property string pendingPath: ""
         // "open" | "saveAs" | "encrypt" | "change"
         property string intent: "open"
 
         onPassphraseAccepted: function (passphrase) {
+            if (intent !== "open" && !window.unlockedDocument)
+                return
             switch (intent) {
             case "open": {
                 const result = Documents.openFile(pendingPath, passphrase)
@@ -465,6 +887,29 @@ ApplicationWindow {
     Connections {
         target: Documents
         function onErrorOccurred(message) { messageDialog.show(message) }
+        function onCurrentIndexChanged() {
+            if (!window.splitEditors)
+                return
+            const selected = Documents.currentDocument
+            if (selected === window.leftDocument)
+                window.activeSide = 0
+            else if (selected === window.rightDocument)
+                window.activeSide = 1
+            else if (window.activeSide === 0)
+                window.leftDocument = selected
+            else
+                window.rightDocument = selected
+        }
+        function onCountChanged() {
+            if (unlockTabDialog.document && !window.containsDocument(unlockTabDialog.document))
+                unlockTabDialog.reject()
+            if (window.splitEditors && (!window.containsDocument(window.leftDocument) || !window.containsDocument(window.rightDocument)))
+                window.toggleSplit()
+            if (comparisonDialog.sourceDocument && !window.containsDocument(comparisonDialog.sourceDocument))
+                comparisonDialog.close()
+            if (validationDialog.pane && !window.containsDocument(validationDialog.pane.doc))
+                validationDialog.close()
+        }
     }
 
     Connections {
@@ -547,7 +992,7 @@ ApplicationWindow {
             AppMenuItem {
                 text: "Reload from Disk"
                 enabled: window.currentDoc && !window.currentDoc.isUntitled
-                onTriggered: window.currentDoc.reload()
+                onTriggered: window.requestReload(window.currentDoc)
             }
             MenuSeparator {}
             AppMenuItem { text: "Close Tab"; shortcutText: "Ctrl+W"; enabled: Documents.count > 0; onTriggered: window.closeTab(Documents.currentIndex) }
@@ -559,8 +1004,8 @@ ApplicationWindow {
             AppMenuItem { text: "Undo"; shortcutText: "Ctrl+Z"; enabled: window.currentPane !== null; onTriggered: if (window.currentPane) window.currentPane.editor.undo() }
             AppMenuItem { text: "Redo"; shortcutText: "Ctrl+Y"; enabled: window.currentPane !== null; onTriggered: if (window.currentPane) window.currentPane.editor.redo() }
             MenuSeparator {}
-            AppMenuItem { text: "Cut"; shortcutText: "Ctrl+X"; enabled: window.currentPane !== null; onTriggered: if (window.currentPane) window.currentPane.editor.cut() }
-            AppMenuItem { text: "Copy"; shortcutText: "Ctrl+C"; enabled: window.currentPane !== null; onTriggered: if (window.currentPane) window.currentPane.editor.copy() }
+            AppMenuItem { text: "Cut"; shortcutText: "Ctrl+X"; enabled: window.editableDocument; onTriggered: if (window.currentPane) window.currentPane.copySelection(true) }
+            AppMenuItem { text: "Copy"; shortcutText: "Ctrl+C"; enabled: window.unlockedDocument; onTriggered: if (window.currentPane) window.currentPane.copySelection(false) }
             AppMenuItem { text: "Paste"; shortcutText: "Ctrl+V"; enabled: window.currentPane !== null; onTriggered: if (window.currentPane) window.currentPane.editor.paste() }
             AppMenuItem { text: "Select All"; shortcutText: "Ctrl+A"; enabled: window.currentPane !== null; onTriggered: if (window.currentPane) window.currentPane.editor.selectAll() }
             MenuSeparator {}
@@ -640,6 +1085,19 @@ ApplicationWindow {
 
         AppMenu {
             title: "View"
+            AppMenuItem { text: "Command Console"; shortcutText: "Ctrl+`"; checkable: true; checked: window.showConsole; onTriggered: window.toggleConsole() }
+            AppMenuItem { text: "Local Git..."; shortcutText: "Ctrl+Alt+G"; onTriggered: gitPanel.showFor(window.workingDirectory()) }
+            AppMenuItem { text: "Pin / Unpin Tab"; enabled: window.currentDoc !== null; onTriggered: window.runCommand("pin") }
+            AppMenu {
+                title: "Bookmarks"
+                AppMenuItem { text: "Toggle Bookmark"; shortcutText: "Ctrl+F2"; enabled: window.currentPane !== null; onTriggered: window.runCommand("bookmark") }
+                AppMenuItem { text: "Next Bookmark"; shortcutText: "F2"; enabled: window.currentPane !== null; onTriggered: window.navigateBookmark(false) }
+                AppMenuItem { text: "Previous Bookmark"; shortcutText: "Shift+F2"; enabled: window.currentPane !== null; onTriggered: window.navigateBookmark(true) }
+                AppMenuItem { text: "Clear Tab Bookmarks"; enabled: window.currentPane !== null; onTriggered: window.runCommand("clearBookmarks") }
+            }
+            AppMenuItem { text: "Split Editors"; shortcutText: "Ctrl+Alt+S"; checkable: true; checked: window.splitEditors; onTriggered: window.toggleSplit() }
+            AppMenuItem { text: "JSON Tree"; enabled: window.currentDoc !== null && window.currentDoc.language === "json"; onTriggered: window.showJsonTree() }
+            AppMenuItem { text: "Markdown Preview"; checkable: true; checked: window.showMarkdownPreview; enabled: window.currentDoc !== null && window.currentDoc.language === "markdown"; onTriggered: window.showMarkdownPreview = !window.showMarkdownPreview }
             AppMenuItem { action: commandPaletteAction; shortcutText: "F1" }
             AppMenuItem { action: workspaceSearchAction; shortcutText: "Ctrl+Shift+F" }
             AppMenuItem { text: "Project Explorer"; shortcutText: "Ctrl+B"; checkable: true; checked: Prefs.showProjectExplorer
@@ -668,6 +1126,13 @@ ApplicationWindow {
 
         AppMenu {
             title: "Tools"
+            AppMenuItem { action: lockTabAction; shortcutText: "Ctrl+Alt+L" }
+            AppMenuItem { text: "Recover Interrupted Session..."; onTriggered: window.showRecovery() }
+            AppMenuItem { text: "Validate JSON / XML"; enabled: window.unlockedDocument && ["json", "xml"].includes(window.currentDoc.language); onTriggered: validationDialog.showFor(window.currentPane) }
+            AppMenuItem { text: "Compare with Disk"; enabled: window.currentDoc !== null && !window.currentDoc.isUntitled; onTriggered: window.comparePaneWithDisk(window.currentPane, false) }
+            AppMenuItem { text: "Compare with File..."; enabled: window.currentPane !== null; onTriggered: compareFileDialog.open() }
+            AppMenuItem { text: "Compare with Open Tab..."; enabled: window.unlockedDocument && Documents.count > 1; onTriggered: compareTabDialog.open() }
+            MenuSeparator {}
             AppMenuItem {
                 text: "Encrypt File\u2026"
                 shortcutText: "Ctrl+Shift+E"
@@ -676,7 +1141,7 @@ ApplicationWindow {
             }
             AppMenuItem {
                 text: "Change Passphrase\u2026"
-                enabled: window.currentDoc && window.currentDoc.encrypted
+                enabled: window.unlockedDocument && window.currentDoc.encrypted
                 onTriggered: {
                     passphraseDialog.intent = "change"
                     passphraseDialog.promptNew(window.currentDoc.displayName)
@@ -684,7 +1149,7 @@ ApplicationWindow {
             }
             AppMenuItem {
                 text: "Remove Encryption"
-                enabled: window.currentDoc && window.currentDoc.encrypted
+                enabled: window.unlockedDocument && window.currentDoc.encrypted
                 onTriggered: {
                     if (window.currentDoc.removeEncryption(window.preparedText())) {
                         Documents.refresh(Documents.currentIndex)
@@ -746,6 +1211,8 @@ ApplicationWindow {
             BarButton { objectName: "quickOpenButton"; action: quickOpenAction; text: "Files"; tip: "Quick Open (Ctrl+P)" }
             BarButton { objectName: "workspaceSearchToolbarButton"; action: workspaceSearchAction; text: "Search"; tip: "Search Workspace (Ctrl+Shift+F)" }
             BarButton { objectName: "commandPaletteButton"; action: commandPaletteAction; text: ">"; tip: "Command Palette (F1)" }
+            BarButton { objectName: "splitEditorsButton"; text: "||"; tip: "Toggle Split Editors (Ctrl+Alt+S)"; onClicked: window.toggleSplit() }
+            BarButton { objectName: "lockTabButton"; action: lockTabAction; text: window.currentDoc && window.currentDoc.locked ? "Unlock" : "Lock"; tip: "Lock / Unlock Encrypted Tab (Ctrl+Alt+L)" }
             BarButton {
                 objectName: "prettyPrintButton"
                 action: prettyPrintAction
@@ -853,6 +1320,7 @@ ApplicationWindow {
                 Layout.preferredWidth: Prefs.projectExplorerWidth
                 Layout.fillHeight: true
                 onOpenFileRequested: function (path) { window.openFiles([path]) }
+                onCompareFilesRequested: function(paths) { window.compareExplorerFiles(paths) }
             }
 
             // Resizable Splitter
@@ -947,6 +1415,7 @@ ApplicationWindow {
                             required property string title
                             required property bool modified
                             required property bool encrypted
+                            required property bool pinned
                             readonly property bool checked: index === Documents.currentIndex
                             readonly property bool hovered: tabMouse.containsMouse
 
@@ -1006,7 +1475,7 @@ ApplicationWindow {
                                     }
                                     Text {
                                         id: tabLabel
-                                        text: (tabButton.modified ? "\u2022 " : "") + tabButton.title
+                                        text: (tabButton.pinned ? "[P] " : "") + (tabButton.modified ? "\u2022 " : "") + tabButton.title
                                         color: Prefs.chromeText
                                         opacity: tabButton.checked ? 1.0 : 0.65
                                         elide: Text.ElideMiddle
@@ -1023,6 +1492,7 @@ ApplicationWindow {
                                     implicitWidth: 18
                                     implicitHeight: 18
                                     text: "\u2715"
+                                    enabled: !tabButton.pinned
                                     onClicked: window.closeTab(tabButton.index)
                                 }
                             }
@@ -1043,17 +1513,24 @@ ApplicationWindow {
                                 if (i === keep)
                                     continue
                                 const d = Documents.documentAt(i)
-                                if (d && d.modified)
+                                if (d && (d.modified || d.pinned))
                                     kept++
                                 else
                                     Documents.closeDocument(i)
                             }
                             if (kept > 0)
-                                window.toast(kept + " tab(s) with unsaved changes kept")
+                                window.toast(kept + " pinned or modified tab(s) kept")
                         }
 
                         AppMenuItem {
+                            objectName: "pinTabMenuItem"
+                            text: tabMenu.doc && tabMenu.doc.pinned ? "Unpin Tab" : "Pin Tab"
+                            enabled: tabMenu.doc !== null
+                            onTriggered: tabMenu.doc.pinned = !tabMenu.doc.pinned
+                        }
+                        AppMenuItem {
                             text: "Close"
+                            enabled: tabMenu.doc !== null && !tabMenu.doc.pinned
                             onTriggered: window.closeTab(tabMenu.tabIndex)
                         }
                         AppMenuItem {
@@ -1130,24 +1607,71 @@ ApplicationWindow {
                         }
                     }
 
-                    StackLayout {
+                    Item {
                         id: stack
-                        anchors.fill: parent
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: markdownPreview.visible ? parent.width * 0.6 : parent.width
                         visible: Documents.count > 0
-                        currentIndex: Documents.currentIndex
 
                         Repeater {
                             id: paneRepeater
                             model: Documents
                             EditorPane {
+                                id: editorPaneDelegate
                                 required property var document
                                 required property int index
                                 doc: document
                                 docIndex: index
                                 prettyPrintAction: window.prettyPrintCommand
+                                safetyTools: safety
+                                lockAction: window.tabLockCommand
+                                Connections {
+                                    target: editorPaneDelegate.doc
+                                    function onErrorOccurred(message) { messageDialog.show(message) }
+                                }
+                                visible: window.splitEditors
+                                         ? (doc === window.leftDocument || doc === window.rightDocument)
+                                         : index === Documents.currentIndex
+                                x: window.splitEditors && doc === window.rightDocument ? stack.width * window.splitRatio + 3 : 0
+                                width: !window.splitEditors ? stack.width : (doc === window.rightDocument ? stack.width * (1 - window.splitRatio) - 3 : stack.width * window.splitRatio - 3)
+                                height: stack.height
                                 onStatusChanged: status.refresh()
+                                onActivated: {
+                                    if (visible)
+                                        Documents.currentIndex = index
+                                }
+                                onExternalChangeRequested: window.comparePaneWithDisk(editorPaneDelegate, true)
                             }
                         }
+                        Rectangle {
+                            objectName: "splitEditorDivider"
+                            visible: window.splitEditors
+                            x: stack.width * window.splitRatio - 3
+                            width: 6
+                            height: parent.height
+                            color: Prefs.border
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.SplitHCursor
+                                onPositionChanged: function(mouse) {
+                                    if (pressed)
+                                        window.splitRatio = Math.max(0.2, Math.min(0.8, mapToItem(stack, mouse.x, mouse.y).x / stack.width))
+                                }
+                            }
+                        }
+                    }
+                    MarkdownPreview {
+                        id: markdownPreview
+                        safetyTools: safety
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.right: parent.right
+                        width: parent.width * 0.4
+                        visible: window.showMarkdownPreview && window.unlockedDocument && window.currentDoc.language === "markdown"
+                        pane: visible ? window.currentPane : null
+                        onCloseRequested: window.showMarkdownPreview = false
                     }
                 }
 
@@ -1157,6 +1681,14 @@ ApplicationWindow {
                     pane: window.currentPane
                     onToast: function (message) { status.flash(message) }
                     onClosed: if (window.currentPane) window.currentPane.focusEditor()
+                }
+                CommandConsolePanel {
+                    id: consolePanel
+                    backend: commandConsole
+                    visible: window.showConsole
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.min(260, window.height * 0.4)
+                    onCloseRequested: window.toggleConsole()
                 }
             }
         }
@@ -1242,6 +1774,7 @@ ApplicationWindow {
 
     // ---------------------------------------------------------- shortcuts
     Shortcut { sequences: [StandardKey.New]; onActivated: window.newFile() }
+    Shortcut { sequence: "Ctrl+Alt+S"; onActivated: window.toggleSplit() }
     Shortcut { sequences: [StandardKey.Open]; onActivated: openDialog.open() }
     Shortcut { sequences: [StandardKey.Save]; enabled: window.currentDoc !== null; onActivated: window.saveCurrent() }
     Shortcut { sequences: [StandardKey.SaveAs]; enabled: window.currentDoc !== null; onActivated: { saveDialog.encrypting = false; saveDialog.open() } }
@@ -1257,7 +1790,17 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+G"; enabled: window.currentPane !== null; onActivated: gotoDialog.promptFor(
                    window.currentPane ? window.currentPane.metrics.lineCount() : 1,
                    window.currentPane ? window.currentPane.currentLine : 1) }
-    Shortcut { sequence: "Ctrl+D"; enabled: window.currentPane !== null; onActivated: window.runOp(TextOps.duplicateLines) }
+    Shortcut { sequence: "Ctrl+D"; enabled: explorerSidebar.treeFocused || (window.currentPane !== null && window.currentPane.editor.activeFocus); onActivated: {
+        if (explorerSidebar.treeFocused)
+            explorerSidebar.compareSelected()
+        else
+            window.runOp(TextOps.duplicateLines)
+    } }
+    Shortcut { sequence: "Ctrl+`"; onActivated: window.toggleConsole() }
+    Shortcut { sequence: "Ctrl+Alt+G"; onActivated: gitPanel.showFor(window.workingDirectory()) }
+    Shortcut { sequence: "Ctrl+F2"; enabled: window.currentPane !== null; onActivated: window.runCommand("bookmark") }
+    Shortcut { sequence: "F2"; enabled: window.currentPane !== null; onActivated: window.navigateBookmark(false) }
+    Shortcut { sequence: "Shift+F2"; enabled: window.currentPane !== null; onActivated: window.navigateBookmark(true) }
     Shortcut { sequence: "Ctrl+Shift+K"; enabled: window.currentPane !== null; onActivated: window.runOp(TextOps.deleteLines) }
     Shortcut { sequence: "Alt+Up"; enabled: window.currentPane !== null; onActivated: window.runOp(TextOps.moveLinesUp) }
     Shortcut { sequence: "Alt+Down"; enabled: window.currentPane !== null; onActivated: window.runOp(TextOps.moveLinesDown) }

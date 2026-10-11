@@ -457,6 +457,23 @@ def test_delete_closes_clean_documents(
     assert not explorer.canPaste
 
 
+def test_delete_blocks_pinned_documents(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    from cipherpad.document import DocumentManager
+    manager = DocumentManager()
+    explorer.bind_documents(manager)
+    explorer.addFolder(str(sample_tree))
+    source = sample_tree / "main.py"
+    manager.openFile(str(source))
+    manager.currentDocument.pinned = True
+    errors = []
+    explorer.errorOccurred.connect(errors.append)
+    assert not explorer.deleteItem(str(source))
+    assert source.exists() and manager.count == 1
+    assert "Unpin" in errors[-1]
+    manager.currentDocument.pinned = False
+    manager.closeAll()
+
+
 def test_delete_trash_failure_preserves_file(
     explorer: ProjectExplorer, sample_tree: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

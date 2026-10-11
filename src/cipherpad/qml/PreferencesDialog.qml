@@ -400,6 +400,26 @@ AppDialog {
                     }
                     SectionLabel { text: "Session" }
                     Check {
+                        text: "Crash recovery for ordinary tabs (plaintext, every 30 seconds)"
+                        checked: Prefs.recoveryEnabled
+                        onToggled: Prefs.recoveryEnabled = checked
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Encrypted tabs never write recovery snapshots. Locking is manual and retains edits encrypted in memory."
+                        wrapMode: Text.Wrap
+                        color: Prefs.chromeText
+                    }
+                    RowLayout {
+                        FieldLabel { text: "Sensitive clipboard expiry" }
+                        Spin {
+                            from: 0; to: 3600
+                            value: Prefs.clipboardExpirySeconds
+                            onValueModified: Prefs.clipboardExpirySeconds = value
+                        }
+                        Label { text: "seconds (0 = off)"; color: Prefs.chromeText }
+                    }
+                    Check {
                         text: "Reopen last session on startup"
                         checked: Prefs.restoreSession
                         onToggled: Prefs.restoreSession = checked

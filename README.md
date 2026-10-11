@@ -77,6 +77,124 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
 - Document statistics (characters, words, lines, paragraphs)
 - All transformations go through an undoable range-replacement layer, so `Ctrl+Z` works
 
+### Command console, local Git & tab navigation
+- **View > Command Console** (``Ctrl+` ``) opens a docked command input/output
+  panel. Select a working directory, run an executable with double-quoted
+  arguments, watch streamed stdout/stderr, send standard input, send EOF, stop
+  the process, or clear output. Output history is bounded to 200,000 characters.
+  Hiding the panel does not stop its command; exiting stops the directly managed
+  process. Independently spawned/detached child processes are not managed.
+- This is a portable **command console**, not a PTY or terminal emulator.
+  Shell pipes, redirection and built-ins require explicitly invoking an installed
+  shell. ANSI terminal controls and full-screen terminal programs are not supported.
+  Commands run with your user permissions. Editor buffers are never automatically
+  exported to the console.
+- **View > Local Git** (`Ctrl+Alt+G`) displays repository branch and changed
+  files. Refresh status, inspect working/staged unified diffs, stage/unstage a
+  selected file, or enter a message and confirm a commit. Git must be installed
+  on PATH. These operations use saved files, not unsaved editor buffers.
+  Commits include **all staged repository changes**, including changes staged
+  outside Cipherpad, and run configured hooks. Git operations have a 30-second
+  timeout and a 4 MB output limit. Fetch, pull, push and discard are not offered.
+- **Pin Tab / Unpin Tab** in the tab context menu, View menu or command palette
+  protects against close-button, middle-click, `Ctrl+W` and bulk closure.
+  Pinned tabs display `[P]` and must be unpinned before closing. Explorer deletion
+  also refuses items containing pinned documents. Pins are session-only;
+  application quit still uses the normal unsaved-changes confirmation.
+- **Line bookmarks**: `Ctrl+F2` toggles the current line, `F2` jumps to the next,
+  and `Shift+F2` to the previous bookmark, wrapping within the current tab.
+  Click the left edge of the gutter to toggle its line marker. The View >
+  Bookmarks menu and command palette also expose toggle/navigation/clear.
+  Bookmark cursor anchors follow edits, including lines inserted above them.
+  Deleting a bookmarked line moves its marker to the surviving line at that
+  position. Markers are session-only and clear on reload or encrypted-tab locking;
+  normal saves and split-editor changes preserve them.
+- **Explorer comparison**: use Ctrl-click to select exactly two files, then
+  press `Ctrl+D` while the explorer has focus, or choose **Compare Selected
+  Files** from a selected file's right-click menu. Ctrl-click does not open files.
+  Ordinary clicks continue to open a file. The diff uses saved disk contents;
+  binary, encrypted, missing and oversized files report errors without changing
+  editor buffers. `Ctrl+D` in the editor retains Duplicate Line behavior.
+- Implemented with portable Qt process and text-document APIs; no new dependency
+  is needed beyond an installed Git CLI. Windows execution is tested; macOS/Linux
+  execution has not been verified here.
+
+### Split editors, inspection & previews
+- **View > Split Editors** (`Ctrl+Alt+S`, or the **||** toolbar button) shows two
+  different open documents side by side. If only one document is open, a new empty
+  tab is created for the other side. Clicking an editor makes it the target for
+  save, undo, find, formatting and status information. Selecting a different tab
+  replaces the active side; dragging the divider resizes the panes. Turning split
+  off preserves both buffers, selections and undo histories. Closing either
+  displayed tab returns to a single editor.
+- **Tools > Compare with Disk / Compare with File / Compare with Open Tab**
+  offers a syntax-coloured unified diff and read-only side-by-side versions.
+  Open-tab comparison includes unsaved buffers. A final-newline-only change is
+  shown explicitly. Comparisons are limited to 2 million characters and 20,000
+  lines per side; disk reads are capped at 8 MB.
+- External file changes open a comparison instead of silently replacing edits.
+  **Reload Disk Version** and **File > Reload from Disk** require confirmation
+  before discarding unsaved edits. Atomic file replacements re-establish the
+  file watcher. Identical disk/editor content does not open a change dialog.
+- Unlocked encrypted documents can be compared with disk or another unlocked
+  tab. Decrypted snapshots, diffs and previews stay in memory, and closing a
+  comparison clears its snapshots. Comparing a separate encrypted file requires
+  opening/unlocking it first, then using **Compare with Open Tab**.
+- **Tools > Validate JSON / XML** reports syntax errors with line/column and
+  **Go to Error** navigation. Optionally select a UTF-8 JSON Schema or XSD:
+  JSON schema failures identify the instance's JSON pointer; XSD failures include
+  line information. Schema syntax errors are distinguished from document errors.
+  Only self-contained schemas and same-document JSON references are supported;
+  remote references, DTDs and XSD imports/includes are rejected.
+- **View > JSON Tree** browses objects, arrays and scalar values with collapsible
+  branches and copyable JSON pointers. Duplicate keys and original number lexemes
+  are retained. Views are capped at 10,000 nodes; long row labels are truncated.
+- **View > Markdown Preview** renders a live, read-only preview beside the editor,
+  including headings, lists, tables and code blocks supported by Qt's GitHub
+  Markdown dialect. It is offline: image resources are never loaded, images are
+  replaced with an omission label, and links do not launch a browser.
+- Validation, JSON viewing and Markdown preview are limited to 2 million source
+  characters. All these commands are also searchable in the command palette.
+- These features use Qt/Python APIs on Windows, macOS and Linux; no OS-specific
+  commands or external preview tools are required.
+
+### Crash recovery, locking & clipboard protection
+- Modified ordinary tabs (including untitled tabs) are snapshotted **every 30
+  seconds**, without saving over the original files. Recovery is enabled by
+  default and can be disabled in **Preferences > Files**. Snapshots contain
+  **plaintext** and are stored in Qt's per-user application-data directory,
+  under `recovery`. Each snapshot is limited to 8 MB.
+- After an interrupted session, a recovery dialog offers **Restore** or
+  confirmed **Discard** for each snapshot. Restore creates a modified untitled
+  tab, preserving text, language, encoding and line endings. It never overwrites
+  the original file, which may have changed meanwhile. The dialog is also
+  available under **Tools > Recover Interrupted Session** and in the command
+  palette. Other running Cipherpad instances are excluded using Qt session locks.
+- Successful saves, explicit tab closure/discard, disabling recovery and normal
+  application exit remove the current session's snapshots. Closing the recovery
+  dialog leaves older snapshots available for a later decision.
+- **Encrypted tabs never write persistent recovery snapshots**, and therefore
+  their unsaved edits cannot be recovered after a process crash.
+- **Tools > Lock Encrypted Tab** / **Unlock Tab** (`Ctrl+Alt+L`, toolbar,
+  editor right-click menu or command palette) locks the current encrypted tab.
+  Unsaved edits are encrypted in memory using its existing passphrase. The
+  editor and inspection views are cleared and saving/reloading is blocked until
+  that passphrase is entered again. Locking resets undo history and cursor
+  position, but retains text, modified state and document settings. Locking is
+  **manual only**; there is no automatic idle locking.
+- Text copied/cut from encrypted editors, comparisons and Markdown previews,
+  and pointers copied from encrypted JSON trees, expires from the system
+  clipboard after **30 seconds** by default. **Preferences > Files** allows
+  0 (off) through 3600 seconds. Clipboard ownership is tagged, so content
+  subsequently copied by another application is not cleared, even if the text
+  is identical. Ordinary-tab copies do not expire. Outstanding protected
+  clipboard content is also cleared on normal exit.
+- Locking cannot guarantee zeroisation of Python/Qt allocations or protection
+  from OS swap, crash dumps or clipboard-history services. Clipboard expiry
+  does not remove copies retained by other applications or clipboard history.
+- Recovery, locking and clipboard protection use portable Qt/Python APIs, with
+  no platform-specific commands or external key storage.
+
 ### Appearance & preferences
 - Built-in themes plus fully editable colours, including a per-token syntax palette
 - Font family, size, line height, tab width, insert-spaces, zoom in/out/reset
@@ -92,7 +210,8 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
 
 - Python **3.14+**
 - [`uv`](https://docs.astral.sh/uv/)
-- Dependencies: `pyside6 >= 6.9`, `cryptography >= 43`
+- Dependencies: `pyside6 >= 6.9`, `cryptography >= 43`, `jsonschema >= 4.23`,
+  `lxml >= 6` (portable JSON Schema and XSD validation)
 
 ## Install & run
 
@@ -116,7 +235,8 @@ uv run pytest -q
 ```
 
 The suite runs headless (`QT_QPA_PLATFORM=offscreen`, set in `tests/conftest.py`) and
-covers crypto, documents, search, text operations, languages and preferences.
+covers crypto, documents, search, text operations, languages, preferences,
+inspection, crash recovery, encrypted-tab locking and clipboard protection.
 
 ---
 
@@ -161,6 +281,8 @@ Notes:
 | Search workspace | `Ctrl+Shift+F` |
 | Quick Open | `Ctrl+P` |
 | Command Palette | `F1` |
+| Toggle split editors | `Ctrl+Alt+S` |
+| Lock / unlock encrypted tab | `Ctrl+Alt+L` |
 | Find next / previous | `F3` / `Shift+F3` |
 | Go to line | `Ctrl+G` |
 | Duplicate line / Delete line | `Ctrl+D` / `Ctrl+Shift+K` |

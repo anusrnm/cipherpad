@@ -752,6 +752,9 @@ class ProjectExplorer(QAbstractListModel):
         if not self._validate_item(path, destructive=True):
             return False
         documents = self._documents.documents_under_path(path) if self._documents is not None else []
+        if any(doc.pinned for doc in documents):
+            self.errorOccurred.emit("Unpin or close documents in this item before deleting it.")
+            return False
         if any(doc.modified for doc in documents):
             self.errorOccurred.emit("Save or close unsaved documents in this item before deleting it.")
             return False

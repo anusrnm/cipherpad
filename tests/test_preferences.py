@@ -46,6 +46,17 @@ def test_defaults_are_loaded(prefs: Preferences) -> None:
     assert prefs.tabWidth == DEFAULTS["tabWidth"]
     assert prefs.insertSpaces is DEFAULTS["insertSpaces"]
     assert prefs.wordWrap is DEFAULTS["wordWrap"]
+    assert prefs.recoveryEnabled is True
+    assert prefs.clipboardExpirySeconds == 30
+
+
+def test_recovery_and_clipboard_preferences_persist(prefs: Preferences) -> None:
+    prefs.recoveryEnabled = False
+    prefs.clipboardExpirySeconds = 90
+    prefs.sync()
+    restored = reopen()
+    assert restored.recoveryEnabled is False
+    assert restored.clipboardExpirySeconds == 90
 
 
 def test_default_palette_matches_dark_theme(prefs: Preferences) -> None:

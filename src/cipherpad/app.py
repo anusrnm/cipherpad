@@ -12,8 +12,9 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
 # Importing these registers the @QmlElement types with the Cipherpad module.
-from . import crypto, document, explorer, gutter, highlighter, preferences, search, textops  # noqa: F401
+from . import crypto, document, explorer, gutter, highlighter, preferences, process_tools, safety, search, textops  # noqa: F401
 from .workspace import WorkspaceTools
+from .inspection import InspectionTools
 
 ORGANISATION = "Cipherpad"
 APPLICATION = "Cipherpad"
@@ -49,6 +50,7 @@ def run(argv: list[str] | None = None) -> int:
     project_explorer = explorer.ProjectExplorer()
     project_explorer.bind_documents(manager)
     workspace_tools = WorkspaceTools(project_explorer)
+    inspection_tools = InspectionTools()
     app.aboutToQuit.connect(workspace_tools.shutdown)
     engine = QQmlApplicationEngine()
 
@@ -60,6 +62,7 @@ def run(argv: list[str] | None = None) -> int:
     context.setContextProperty("Crypto", crypto_info)
     context.setContextProperty("Explorer", project_explorer)
     context.setContextProperty("Workspace", workspace_tools)
+    context.setContextProperty("Inspection", inspection_tools)
     context.setContextProperty("appVersion", QCoreApplication.applicationVersion())
 
     engine.addImportPath(str(QML_DIR))

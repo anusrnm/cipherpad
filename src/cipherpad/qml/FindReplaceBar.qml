@@ -22,6 +22,8 @@ Rectangle {
     visible: false
 
     function open(withReplace) {
+        if (pane && pane.doc.locked)
+            return
         replaceVisible = withReplace === true
         if (pane && pane.editor.selectedText.length > 0
                 && pane.editor.selectedText.indexOf("\n") < 0)
@@ -37,6 +39,12 @@ Rectangle {
         if (pane)
             pane.applySearchHighlight("", false, false, false)
         bar.closed()
+    }
+
+    function clearSensitive() {
+        close()
+        findField.text = ""
+        replaceField.text = ""
     }
 
     function refresh() {
@@ -88,7 +96,7 @@ Rectangle {
     }
 
     function replaceOne() {
-        if (!pane || needle === "")
+        if (!pane || pane.doc.locked || pane.doc.readOnly || needle === "")
             return
         const result = Search.replaceCurrent(pane.editor.text, needle, replacement,
                                              pane.editor.selectionStart, pane.editor.selectionEnd,
@@ -102,7 +110,7 @@ Rectangle {
     }
 
     function replaceAll() {
-        if (!pane || needle === "")
+        if (!pane || pane.doc.locked || pane.doc.readOnly || needle === "")
             return
         const spans = Search.replacementSpans(pane.editor.text, needle, replacement,
                                               Prefs.searchCaseSensitive, Prefs.searchWholeWord,

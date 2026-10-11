@@ -149,12 +149,14 @@ def _check_pretty_print_qml(settings_directory: str) -> None:
     project_explorer = explorer.ProjectExplorer()
     project_explorer.bind_documents(manager)
     from cipherpad.workspace import WorkspaceTools
+    from cipherpad.inspection import InspectionTools
     workspace_tools = WorkspaceTools(project_explorer)
     backends = {
         "Prefs": prefs, "Documents": manager, "Search": search.SearchEngine(),
         "TextOps": TextOps(), "Crypto": crypto.CryptoInfo(),
         "Explorer": project_explorer, "appVersion": "test",
         "Workspace": workspace_tools,
+        "Inspection": InspectionTools(),
     }
     engine = QQmlApplicationEngine()
     warnings: list[str] = []

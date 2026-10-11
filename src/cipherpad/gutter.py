@@ -23,11 +23,13 @@ class DocumentMetrics(QObject):
 
     documentChanged = Signal()
     layoutChanged = Signal()
+    bookmarksChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._quick_document: QQuickTextDocument | None = None
         self._document: QTextDocument | None = None
+        self._bookmarks: list[QTextCursor] = []
 
     def _get_document(self) -> QQuickTextDocument | None:
         return self._quick_document
@@ -40,15 +42,51 @@ class DocumentMetrics(QObject):
                 self._document.contentsChanged.disconnect(self.layoutChanged)
             except (RuntimeError, TypeError):
                 pass
+            self._document.contentsChanged.disconnect(self.bookmarksChanged)
 
+        self.clearBookmarks()
         self._quick_document = document
         self._document = document.textDocument() if document is not None else None
         if self._document is not None:
             self._document.contentsChanged.connect(self.layoutChanged)
+            self._document.contentsChanged.connect(self.bookmarksChanged)
         self.documentChanged.emit()
         self.layoutChanged.emit()
 
     document = Property(QQuickTextDocument, _get_document, _set_document, notify=documentChanged)
+
+    @Property("QVariantList", notify=bookmarksChanged)
+    def bookmarks(self) -> list[int]:
+        return sorted({cursor.blockNumber() + 1 for cursor in self._bookmarks if not cursor.isNull()})
+
+    @Slot()
+    def clearBookmarks(self) -> None:
+        self._bookmarks.clear()
+        self.bookmarksChanged.emit()
+
+    @Slot(int)
+    def toggleBookmark(self, line: int) -> None:
+        if self._document is None:
+            return
+        if line in self.bookmarks:
+            self._bookmarks = [cursor for cursor in self._bookmarks if cursor.blockNumber() + 1 != line]
+        else:
+            block = self._document.findBlockByNumber(line - 1)
+            if not block.isValid():
+                return
+            cursor = QTextCursor(block)
+            cursor.setKeepPositionOnInsert(False)
+            self._bookmarks.append(cursor)
+        self.bookmarksChanged.emit()
+
+    @Slot(int, bool, result=int)
+    def adjacentBookmark(self, line: int, previous: bool) -> int:
+        bookmarks = self.bookmarks
+        if not bookmarks:
+            return 0
+        if previous:
+            return next((number for number in reversed(bookmarks) if number < line), bookmarks[-1])
+        return next((number for number in bookmarks if number > line), bookmarks[0])
 
     @Property(int, notify=layoutChanged)
     def lineCount(self) -> int:
@@ -211,4 +249,3 @@ class DocumentMetrics(QObject):
             cursor.insertText(str(span["text"]))
         cursor.endEditBlock()
         return True
-

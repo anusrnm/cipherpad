@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
+import uuid
 from typing import Final
 
 from PySide6.QtCore import (
@@ -84,6 +86,25 @@ def normalize_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def read_disk_snapshot(path: str, fallback: str = "utf-8", passphrase: str = "") -> dict:
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read(8_000_001)
+        if len(raw) > 8_000_000:
+            return {"error": "Disk comparison is limited to files below 8 MB."}
+        encrypted = crypto.is_encrypted(raw)
+        if encrypted:
+            if not passphrase:
+                return {"error": "Open and unlock this encrypted file, then use Compare with Open Tab."}
+            raw = crypto.decrypt(raw, passphrase)
+        encoding = "utf-8" if encrypted else detect_encoding(raw, fallback)
+        if looks_binary(raw) and not raw.startswith((b"\xff\xfe", b"\xfe\xff", b"\x00\x00\xfe\xff")):
+            return {"error": "The disk version is a binary file."}
+        return {"error": "", "text": normalize_newlines(raw.decode(encoding))}
+    except (OSError, UnicodeError, LookupError, crypto.CryptoError) as exc:
+        return {"error": f"Could not read disk version: {exc}"}
+
+
 @QmlElement
 @QmlUncreatable("Documents are created by DocumentManager")
 class Document(QObject):
@@ -96,6 +117,9 @@ class Document(QObject):
     lineEndingChanged = Signal()
     languageChanged = Signal()
     readOnlyChanged = Signal()
+    lockedChanged = Signal()
+    pinnedChanged = Signal()
+    closed = Signal()
 
     contentLoaded = Signal(str)
     errorOccurred = Signal(str)
@@ -117,8 +141,29 @@ class Document(QObject):
         self._loaded_text = ""
         self._watcher: QFileSystemWatcher | None = None
         self._suppress_watch = False
+        self._locked_buffer = b""
+        self._recovery_id = uuid.uuid4().hex
+        self._pinned = False
 
     # -------------------------------------------------------- properties
+    @Property(str, constant=True)
+    def recoveryId(self) -> str:
+        return self._recovery_id
+
+    @Property(bool, notify=pinnedChanged)
+    def pinned(self) -> bool:
+        return self._pinned
+
+    @pinned.setter
+    def pinned(self, value: bool) -> None:
+        if self._pinned != bool(value):
+            self._pinned = bool(value)
+            self.pinnedChanged.emit()
+
+    @Property(bool, notify=lockedChanged)
+    def locked(self) -> bool:
+        return bool(self._locked_buffer)
+
     @Property(str, notify=filePathChanged)
     def filePath(self) -> str:
         return self._file_path
@@ -211,6 +256,9 @@ class Document(QObject):
     @Slot(str, str, result=bool)
     def load(self, path: str, passphrase: str = "") -> bool:
         """Read *path* into the buffer, decrypting when required."""
+        if self.locked:
+            self.errorOccurred.emit("Unlock this tab before loading or reloading it.")
+            return False
         try:
             with open(path, "rb") as handle:
                 raw = handle.read()
@@ -349,6 +397,15 @@ class Document(QObject):
             return False
         return self.load(self._file_path, self._passphrase)
 
+    @Slot(result="QVariantMap")
+    def diskSnapshot(self) -> dict:
+        """Read/decrypt the current disk version without changing editor state."""
+        if self.locked:
+            return {"error": "Unlock this tab before comparing with disk."}
+        if not self._file_path:
+            return {"error": "Save this document before comparing with disk."}
+        return read_disk_snapshot(self._file_path, self._encoding, self._passphrase)
+
     @Slot(str)
     def setPassphrase(self, passphrase: str) -> None:
         self._passphrase = passphrase
@@ -366,9 +423,51 @@ class Document(QObject):
     def close(self) -> None:
         self._unwatch()
         self._passphrase = ""
+        self._loaded_text = ""
+        self._locked_buffer = b""
+        self.closed.emit()
+
+    @Slot(str, result=bool)
+    def lock(self, text: str) -> bool:
+        if self.locked:
+            return True
+        if not self._encrypted or not self._passphrase:
+            self.errorOccurred.emit("Only unlocked encrypted tabs can be locked.")
+            return False
+        payload = json.dumps({"text": text, "modified": self.modified}, ensure_ascii=True).encode("utf-8")
+        try:
+            self._locked_buffer = crypto.encrypt(payload, self._passphrase)
+        except crypto.CryptoError as exc:
+            self.errorOccurred.emit(str(exc))
+            return False
+        self._passphrase = ""
+        self._loaded_text = ""
+        self.lockedChanged.emit()
+        self.contentLoaded.emit("")
+        return True
+
+    @Slot(str, result=bool)
+    def unlock(self, passphrase: str) -> bool:
+        if not self.locked:
+            return True
+        try:
+            payload = json.loads(crypto.decrypt(self._locked_buffer, passphrase))
+        except (crypto.CryptoError, ValueError, UnicodeError) as exc:
+            self.errorOccurred.emit(f"Could not unlock tab: {exc}")
+            return False
+        self._loaded_text = payload["text"]
+        self.modified = payload["modified"]
+        self._passphrase = passphrase
+        self._locked_buffer = b""
+        self.lockedChanged.emit()
+        self.contentLoaded.emit(self._loaded_text)
+        return True
 
     # ------------------------------------------------------------ helpers
     def _write(self, path: str, text: str, encrypt: bool, passphrase: str) -> bool:
+        if self.locked:
+            self.errorOccurred.emit("Unlock this tab before saving or changing encryption.")
+            return False
         newline = LINE_ENDINGS.get(self._line_ending, "\n")
         payload = normalize_newlines(text).replace("\n", newline)
 
@@ -445,6 +544,9 @@ class Document(QObject):
     def _on_file_changed(self, _path: str) -> None:
         if self._suppress_watch:
             return
+        # Atomic replacements remove the original watch on several Qt backends.
+        if self._watcher is not None and os.path.isfile(self._file_path) and self._file_path not in self._watcher.files():
+            self._watcher.addPath(self._file_path)
         self.externallyChanged.emit()
 
 
@@ -457,6 +559,7 @@ class DocumentManager(QAbstractListModel):
     ModifiedRole = Qt.ItemDataRole.UserRole + 3
     PathRole = Qt.ItemDataRole.UserRole + 4
     EncryptedRole = Qt.ItemDataRole.UserRole + 5
+    PinnedRole = Qt.ItemDataRole.UserRole + 6
 
     countChanged = Signal()
     currentIndexChanged = Signal()
@@ -480,6 +583,7 @@ class DocumentManager(QAbstractListModel):
             self.ModifiedRole: QByteArray(b"modified"),
             self.PathRole: QByteArray(b"path"),
             self.EncryptedRole: QByteArray(b"encrypted"),
+            self.PinnedRole: QByteArray(b"pinned"),
         }
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
@@ -497,6 +601,8 @@ class DocumentManager(QAbstractListModel):
                 return document.filePath
             case self.EncryptedRole:
                 return document.encrypted
+            case self.PinnedRole:
+                return document.pinned
         return None
 
     # ------------------------------------------------------------ properties
@@ -531,6 +637,20 @@ class DocumentManager(QAbstractListModel):
     def newDocument(self) -> int:
         self._untitled_counter += 1
         document = Document(f"Untitled-{self._untitled_counter}", self)
+        return self._append(document)
+
+    @Slot(str, str, str, str, str, result=int)
+    def newRecovered(self, text: str, title: str, language: str, encoding: str, line_ending: str) -> int:
+        """Recover into an untitled tab, never overwrite a potentially changed file."""
+        if encoding not in ENCODINGS or line_ending not in LINE_ENDINGS:
+            self.errorOccurred.emit("Invalid recovery encoding or line ending.")
+            return -1
+        document = Document("Recovered - " + title, self)
+        document._loaded_text = text
+        document.language = language
+        document._encoding = encoding
+        document._line_ending = line_ending
+        document.modified = True
         return self._append(document)
 
     @Slot(str, result=int)
@@ -597,6 +717,9 @@ class DocumentManager(QAbstractListModel):
     def closeDocument(self, index: int) -> bool:
         if not 0 <= index < len(self._documents):
             return False
+        if self._documents[index].pinned:
+            self.errorOccurred.emit("Unpin this tab before closing it.")
+            return False
         current_index = self._current_index
         self.beginRemoveRows(QModelIndex(), index, index)
         document = self._documents.pop(index)
@@ -619,15 +742,9 @@ class DocumentManager(QAbstractListModel):
     def closeAll(self) -> None:
         if not self._documents:
             return
-        self.beginResetModel()
-        for document in self._documents:
-            document.close()
-            document.deleteLater()
-        self._documents.clear()
-        self.endResetModel()
-        self._current_index = -1
-        self.countChanged.emit()
-        self.currentIndexChanged.emit()
+        for index in range(len(self._documents) - 1, -1, -1):
+            if not self._documents[index].pinned:
+                self.closeDocument(index)
 
     @Slot(int)
     def refresh(self, index: int) -> None:
@@ -673,6 +790,7 @@ class DocumentManager(QAbstractListModel):
         document.modifiedChanged.connect(lambda: self.refresh(self.indexOf(document)))
         document.filePathChanged.connect(lambda: self.refresh(self.indexOf(document)))
         document.encryptedChanged.connect(lambda: self.refresh(self.indexOf(document)))
+        document.pinnedChanged.connect(lambda: self.refresh(self.indexOf(document)))
 
         self.countChanged.emit()
         self._current_index = index

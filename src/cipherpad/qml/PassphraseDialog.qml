@@ -49,6 +49,11 @@ AppDialog {
 
     onOpened: passField.forceActiveFocus()
     onAccepted: root.passphraseAccepted(passField.text)
+    onClosed: {
+        passField.text = ""
+        confirmField.text = ""
+        revealBox.checked = false
+    }
 
     ColumnLayout {
         spacing: 10

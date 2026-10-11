@@ -12,6 +12,8 @@ Item {
     property real editorPadding: 6
 
     signal lineClicked(int line)
+    signal bookmarkRequested(int line)
+    property var bookmarks: metrics ? metrics.bookmarks : []
 
     property var rows: []
     readonly property int digits: Math.max(3, String(metrics ? metrics.lineCount : 1).length)
@@ -73,6 +75,14 @@ Item {
                     font.pixelSize: Prefs.fontSize
                     font.bold: lineItem.isCurrent
                 }
+                Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 3
+                    text: "*"
+                    color: Prefs.accent
+                    visible: root.bookmarks.includes(lineItem.modelData.number)
+                    font.bold: true
+                }
             }
         }
     }
@@ -85,7 +95,10 @@ Item {
                 const row = root.rows[i]
                 const top = root.screenY(row)
                 if (mouse.y >= top && mouse.y <= top + row.height) {
-                    root.lineClicked(row.number)
+                    if (mouse.x < 16)
+                        root.bookmarkRequested(row.number)
+                    else
+                        root.lineClicked(row.number)
                     return
                 }
             }
