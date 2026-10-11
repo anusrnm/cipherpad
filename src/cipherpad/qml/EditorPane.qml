@@ -9,6 +9,7 @@ Item {
 
     required property var doc          // Document instance from DocumentManager
     required property int docIndex
+    required property var prettyPrintAction
 
     readonly property alias editor: editor
     readonly property alias metrics: metrics
@@ -248,6 +249,37 @@ Item {
                     }
 
                     Keys.onPressed: function (event) { pane.handleKey(event) }
+
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onTapped: function (eventPoint) {
+                            pane.focusEditor()
+                            editorMenu.popup(eventPoint.position)
+                        }
+                    }
+
+                    AppMenu {
+                        id: editorMenu
+                        objectName: "editorContextMenu"
+                        AppMenuItem { text: "Undo"; shortcutText: "Ctrl+Z"; enabled: editor.canUndo && !editor.readOnly
+                            onTriggered: editor.undo() }
+                        AppMenuItem { text: "Redo"; shortcutText: "Ctrl+Y"; enabled: editor.canRedo && !editor.readOnly
+                            onTriggered: editor.redo() }
+                        MenuSeparator {}
+                        AppMenuItem { text: "Cut"; shortcutText: "Ctrl+X"; enabled: pane.selectionLength > 0 && !editor.readOnly
+                            onTriggered: editor.cut() }
+                        AppMenuItem { text: "Copy"; shortcutText: "Ctrl+C"; enabled: pane.selectionLength > 0
+                            onTriggered: editor.copy() }
+                        AppMenuItem { text: "Paste"; shortcutText: "Ctrl+V"; enabled: editor.canPaste && !editor.readOnly
+                            onTriggered: editor.paste() }
+                        AppMenuItem { text: "Select All"; shortcutText: "Ctrl+A"; onTriggered: editor.selectAll() }
+                        MenuSeparator {}
+                        AppMenuItem {
+                            objectName: "prettyPrintContextItem"
+                            action: pane.prettyPrintAction
+                            shortcutText: "Ctrl+Shift+P"
+                        }
+                    }
                 }
             }
         }

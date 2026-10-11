@@ -435,6 +435,10 @@ class Document(QObject):
 
     def _unwatch(self) -> None:
         if self._watcher is not None:
+            self._watcher.fileChanged.disconnect(self._on_file_changed)
+            paths = self._watcher.files()
+            if paths:
+                self._watcher.removePaths(paths)
             self._watcher.deleteLater()
             self._watcher = None
 
@@ -646,6 +650,20 @@ class DocumentManager(QAbstractListModel):
         return opened
 
     # -------------------------------------------------------------- helpers
+    def documents_under_path(self, path: str) -> list[Document]:
+        target = os.path.normcase(os.path.abspath(path))
+        return [
+            doc for doc in self._documents if doc.filePath
+            and (os.path.normcase(doc.filePath) == target
+                 or os.path.normcase(doc.filePath).startswith(target + os.sep))
+        ]
+
+    def relocate_documents(self, old_path: str, new_path: str) -> None:
+        for doc in self.documents_under_path(old_path):
+            updated = new_path + doc.filePath[len(old_path):]
+            doc._set_path(updated)
+            doc._watch(updated)
+
     def _append(self, document: Document) -> int:
         index = len(self._documents)
         self.beginInsertRows(QModelIndex(), index, index)

@@ -85,19 +85,26 @@ _BT_STRING = (r"`(?:[^`\\]|\\.)*`", "string")
 _FUNC_CALL = (r"\b([A-Za-z_]\w*)\s*(?=\()", "function")
 
 _C_BLOCK = (MultiLineRule(r"/\*", r"\*/", "comment"),)
+# Skip quoted text before capturing //, so URLs do not become comments.
+_C_LINE_COMMENT = (
+    r"""^(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|[^"'`/]|/(?!/))*(//[^\n]*)""",
+    "comment",
+)
 
 
-def _c_family(id_: str, name: str, exts: tuple[str, ...], keywords, types=(), extra: tuple[Rule, ...] = ()) -> Language:
+def _c_family(id_: str, name: str, exts: tuple[str, ...], keywords, types=(), extra: tuple[Rule, ...] = (),
+              multiline: tuple[MultiLineRule, ...] = _C_BLOCK, filenames: tuple[str, ...] = ()) -> Language:
     return Language(
         id=id_,
         name=name,
         extensions=exts,
+        filenames=filenames,
         keywords=tuple(keywords),
         types=tuple(types),
         line_comment="//",
         block_comment=("/*", "*/"),
-        rules=(_DQ_STRING, _SQ_STRING, _NUMBER, _FUNC_CALL, _OPERATOR, *extra),
-        multiline=_C_BLOCK,
+        rules=(_C_LINE_COMMENT, _DQ_STRING, _SQ_STRING, _NUMBER, _FUNC_CALL, _OPERATOR, *extra),
+        multiline=multiline,
     )
 
 
@@ -140,8 +147,17 @@ LANGUAGES: dict[str, Language] = {
         _TS_TYPES,
         extra=(_BT_STRING,),
     ),
-    "qml": _c_family("qml", "QML", (".qml",), (*_JS_KEYWORDS, "property", "signal", "readonly", "alias", "component", "required"),
-                     ("int", "real", "string", "bool", "var", "color", "url", "list", "date")),
+    "qml": _c_family(
+        "qml", "QML", (".qml",),
+        (*_JS_KEYWORDS, "property", "signal", "readonly", "alias", "component", "required", "enum", "as", "on"),
+        ("int", "real", "double", "string", "bool", "var", "color", "url", "list", "date",
+         "point", "rect", "size", "vector2d", "vector3d", "vector4d", "quaternion", "Qt", "true", "false", "null"),
+        extra=(
+            (r"\b([A-Z]\w*(?:\.[A-Z]\w*)*)\s*(?=\{)", "type"),
+            (r"\b([a-zA-Z_]\w*(?:\.\w+)*)\s*(?=:)", "attribute"),
+            _BT_STRING,
+        ),
+    ),
     "c": _c_family("c", "C", (".c", ".h"), _C_KEYWORDS, _C_TYPES, extra=((r"^\s*#\s*\w+", "preprocessor"),)),
     "cpp": _c_family(
         "cpp",
@@ -153,6 +169,20 @@ LANGUAGES: dict[str, Language] = {
         extra=((r"^\s*#\s*\w+", "preprocessor"),),
     ),
     "java": _c_family("java", "Java", (".java",), _JAVA_KEYWORDS, (*_C_TYPES, "String", "Object", "List", "Map")),
+    "groovy": _c_family(
+        "groovy", "Groovy", (".groovy", ".gvy", ".gy", ".gsh", ".gradle"),
+        (*_JAVA_KEYWORDS, "as", "def", "in", "trait"),
+        (*_C_TYPES, "String", "Object", "List", "Map", "Set", "Closure", "BigDecimal", "BigInteger",
+         "true", "false", "null"),
+        extra=((r"@\s*[A-Za-z_][\w.]*", "decorator"),),
+        multiline=(
+            *_C_BLOCK,
+            MultiLineRule(r'"""', r'(?<!\\)"""', "string"),
+            MultiLineRule(r"'''", r"(?<!\\)'''", "string"),
+            MultiLineRule(r"\$/", r"/\$", "string"),
+        ),
+        filenames=("Jenkinsfile",),
+    ),
     "csharp": _c_family(
         "csharp",
         "C#",
@@ -377,6 +407,7 @@ for _lang in LANGUAGES.values():
         _FILENAME_INDEX[_name.lower()] = _lang.id
 
 _SHEBANG_HINTS = (
+    ("groovy", "groovy"),
     ("python", "python"),
     ("bash", "shell"),
     ("sh", "shell"),
@@ -416,6 +447,10 @@ def language_names() -> list[tuple[str, str]]:
 
 
 ALIASES: dict[str, str] = {
+    "gradle": "groovy",
+    "gvy": "groovy",
+    "gy": "groovy",
+    "gsh": "groovy",
     "html": "xml",
     "htm": "xml",
     "xhtml": "xml",

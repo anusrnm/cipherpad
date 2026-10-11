@@ -46,6 +46,7 @@ def run(argv: list[str] | None = None) -> int:
     text_ops = textops.TextOps()
     crypto_info = crypto.CryptoInfo()
     project_explorer = explorer.ProjectExplorer()
+    project_explorer.bind_documents(manager)
     engine = QQmlApplicationEngine()
 
     context = engine.rootContext()

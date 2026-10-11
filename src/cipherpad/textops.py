@@ -8,8 +8,11 @@ that achieves the change, so the UI can apply it through ``TextArea.remove`` /
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import re
 from dataclasses import asdict, dataclass
+from xml.dom import Node, minidom
+from xml.parsers.expat import ExpatError
 
 from PySide6.QtCore import QObject, Slot
 
@@ -41,6 +44,71 @@ class EditSpan:
 
 def _no_change(start: int, end: int) -> EditSpan:
     return EditSpan(start, start, "", start, end, changed=False)
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"{value} is not valid JSON")
+
+
+def _pretty_json(text: str, indent: str) -> str:
+    # Validate first, then format tokens so numbers, escapes and duplicate keys
+    # survive unchanged instead of being round-tripped through Python values.
+    json.loads(text, parse_int=str, parse_float=str, parse_constant=_reject_json_constant)
+    tokens = re.findall(r'"(?:[^"\\]|\\.)*"|[{}\[\],:]|[^\s{}\[\],:]+', text)
+    parts: list[str] = []
+    depth = 0
+    for index, token in enumerate(tokens):
+        previous = tokens[index - 1] if index else ""
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if token in ("{", "["):
+            parts.append(token)
+            depth += 1
+            if following not in ("}", "]"):
+                parts.append("\n" + indent * depth)
+        elif token in ("}", "]"):
+            depth -= 1
+            if previous not in ("{", "["):
+                parts.append("\n" + indent * depth)
+            parts.append(token)
+        elif token == ",":
+            parts.append(",\n" + indent * depth)
+        elif token == ":":
+            parts.append(": ")
+        else:
+            parts.append(token)
+    return "".join(parts)
+
+
+def _pretty_xml(text: str, indent: str) -> str:
+    with minidom.parseString(text) as document:
+        if document.doctype is not None:
+            raise ValueError("XML with a DOCTYPE is not supported by Pretty Print")
+
+        def render(node: Node, depth: int) -> str:
+            if not isinstance(node, minidom.Element):
+                return node.toxml()
+            children = list(node.childNodes)
+            # Mixed content, CDATA and xml:space must not acquire new whitespace.
+            if (
+                node.getAttribute("xml:space") == "preserve"
+                or any(child.nodeType == Node.CDATA_SECTION_NODE for child in children)
+                or any(child.nodeType == Node.TEXT_NODE and child.nodeValue
+                       and child.nodeValue.strip() for child in children)
+                or not any(child.nodeType == Node.ELEMENT_NODE for child in children)
+            ):
+                return node.toxml()
+            meaningful = [child for child in children if child.nodeType != Node.TEXT_NODE]
+            opening = node.cloneNode(False).toxml()
+            return (
+                opening[:-2] + ">\n"
+                + "\n".join(indent * (depth + 1) + render(child, depth + 1) for child in meaningful)
+                + "\n" + indent * depth + f"</{node.tagName}>"
+            )
+
+        declaration = re.match(r"\s*(<\?xml\s+.*?\?>)", text, re.DOTALL)
+        parts = [declaration.group(1)] if declaration else []
+        parts.extend(render(child, 0) for child in document.childNodes)
+        return "\n".join(parts)
 
 
 def line_span(text: str, start: int, end: int) -> tuple[int, int]:
@@ -252,6 +320,27 @@ class TextOps(QObject):
     type object, breaking every ``TextOps.<method>()`` call in QML with
     "Property '<method>' of object Cipherpad/TextOps is not a function".
     """
+
+    @Slot(str, str, int, bool, result="QVariantMap")
+    def prettyPrint(self, text: str, language_id: str, tab_width: int, use_spaces: bool) -> dict:
+        indent = " " * max(1, tab_width) if use_spaces else "\t"
+        try:
+            language = get_language(language_id).id
+            if language == "json":
+                updated = _pretty_json(text, indent)
+            elif language == "xml":
+                updated = _pretty_xml(text, indent)
+            else:
+                raise ValueError("Pretty Print supports JSON and XML only")
+        except (ValueError, ExpatError, RecursionError) as exc:
+            return {"changed": False, "error": f"Pretty Print failed: {exc}"}
+        if text.endswith("\n"):
+            updated += "\n"
+        if updated == text:
+            return _no_change(0, 0).to_dict()
+        # Qt cursor positions count UTF-16 code units, not Python characters.
+        end = len(text.encode("utf-16-le")) // 2
+        return EditSpan(0, end, updated, 0, 0).to_dict()
 
     # ------------------------------------------------------------ case ops
     @Slot(str, int, int, result="QVariantMap")

@@ -49,6 +49,13 @@ def test_lookup_by_display_name() -> None:
         ("main.py", "python"),
         ("app.js", "javascript"),
         ("Main.qml", "qml"),
+        ("script.groovy", "groovy"),
+        ("script.GVY", "groovy"),
+        ("script.gy", "groovy"),
+        ("script.gsh", "groovy"),
+        ("build.gradle", "groovy"),
+        ("Jenkinsfile", "groovy"),
+        ("build.gradle.kts", "plain"),
         ("data.json", "json"),
         ("page.html", "xml"),
         ("style.css", "css"),
@@ -64,6 +71,7 @@ def test_detect_by_name(path: str, expected: str) -> None:
 
 
 def test_detect_uses_shebang_when_extension_is_unknown() -> None:
+    assert detect_language("script", "#!/usr/bin/env groovy\nprintln 1") == "groovy"
     assert detect_language("script", "#!/usr/bin/env python3\nprint(1)\n") == "python"
     assert detect_language("script", "#!/bin/bash\necho hi\n") == "shell"
     assert detect_language("script", "#!/usr/bin/env node\n") == "javascript"

@@ -17,9 +17,21 @@ ApplicationWindow {
 
     readonly property var currentDoc: Documents.currentDocument
     readonly property var currentPane: Documents.count >= 0 ? paneRepeater.itemAt(Documents.currentIndex) : null
+    readonly property alias prettyPrintCommand: prettyPrintAction
     property int pendingCloseIndex: -1
     property string pendingAction: ""
     property var pendingPaths: []
+
+    Action {
+        id: prettyPrintAction
+        objectName: "prettyPrintAction"
+        text: "Pretty Print"
+        shortcut: "Ctrl+Shift+P"
+        enabled: window.currentPane !== null && window.currentDoc !== null
+                 && !window.currentDoc.readOnly
+                 && (window.currentDoc.language === "json" || window.currentDoc.language === "xml")
+        onTriggered: window.prettyPrint()
+    }
 
     onWidthChanged: if (visibility === Window.Windowed) Prefs.windowWidth = width
     onHeightChanged: if (visibility === Window.Windowed) Prefs.windowHeight = height
@@ -142,13 +154,27 @@ ApplicationWindow {
 
     function toast(message) { status.flash(message) }
 
+    function prettyPrint() {
+        const pane = currentPane
+        if (!pane || !currentDoc)
+            return
+        const span = TextOps.prettyPrint(pane.editor.text, currentDoc.language,
+                                         Prefs.tabWidth, Prefs.insertSpaces)
+        if (span.error) {
+            messageDialog.show(span.error)
+            return
+        }
+        pane.applySpan(span)
+        pane.focusEditor()
+    }
+
     // ------------------------------------------------------------- dialogs
     FileDialog {
         id: openDialog
         title: "Open files"
         fileMode: FileDialog.OpenFiles
         nameFilters: ["All files (*)", "Text files (*.txt *.md *.log)",
-                      "Encrypted files (*.enc *.aes)", "Source files (*.py *.js *.json *.xml *.html *.css)"]
+                      "Encrypted files (*.enc *.aes)", "Source files (*.py *.js *.qml *.groovy *.gradle *.json *.xml *.html *.css)"]
         onAccepted: window.openFiles(selectedFiles)
     }
 
@@ -327,6 +353,11 @@ ApplicationWindow {
         function onErrorOccurred(message) { messageDialog.show(message) }
     }
 
+    Connections {
+        target: Explorer
+        function onErrorOccurred(message) { messageDialog.show(message) }
+    }
+
     // ---------------------------------------------------------------- menu
     menuBar: MenuBar {
         background: Rectangle {
@@ -418,6 +449,11 @@ ApplicationWindow {
 
         AppMenu {
             title: "Format"
+            AppMenuItem {
+                action: prettyPrintAction
+                shortcutText: "Ctrl+Shift+P"
+            }
+            MenuSeparator {}
             AppMenuItem { text: "Duplicate Line"; shortcutText: "Ctrl+D"; enabled: window.currentPane !== null
                 onTriggered: window.runOp(TextOps.duplicateLines) }
             AppMenuItem { text: "Delete Line"; shortcutText: "Ctrl+Shift+K"; enabled: window.currentPane !== null
@@ -581,6 +617,13 @@ ApplicationWindow {
             BarButton { text: "\u21b7"; tip: "Redo"; enabled: window.currentPane !== null; onClicked: if (window.currentPane) window.currentPane.editor.redo() }
             ToolSeparator {}
             BarButton { text: "\ud83d\udd0d"; tip: "Find (Ctrl+F)"; onClicked: findBar.open(false) }
+            BarButton {
+                objectName: "prettyPrintButton"
+                action: prettyPrintAction
+                text: "{}"
+                tip: "Pretty Print JSON/XML (Ctrl+Shift+P)"
+                Accessible.name: "Pretty Print"
+            }
             ToolSeparator {}
             BarButton {
                 text: "\ud83d\udd12"
@@ -972,6 +1015,7 @@ ApplicationWindow {
                                 required property int index
                                 doc: document
                                 docIndex: index
+                                prettyPrintAction: window.prettyPrintCommand
                                 onStatusChanged: status.refresh()
                             }
                         }

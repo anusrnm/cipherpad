@@ -16,6 +16,13 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
 - Multiple documents in tabs, with per-tab modified indicator and close buttons
 - Open / Save / Save As / Reload from disk, recent-files list, optional session restore
 - Multi-folder project explorer for browsing and managing files and folders
+- Explorer right-click actions: create files/folders, rename, duplicate, cut/copy/paste,
+  delete with confirmation, copy absolute/relative paths, and reveal in File Explorer.
+  The explorer header also offers New File, New Folder and Paste for the selected folder
+  (or the selected file's parent). Cut/copy/paste uses an app-local file clipboard.
+  Existing destinations are never overwritten; cross-volume cut/paste reports an error.
+  Delete uses Trash/Recycle Bin and closes clean open tabs, but refuses items with
+  unsaved documents and workspace roots. Renaming/moving keeps open tabs and watchers in sync.
 - Atomic saves (temp file + `os.replace`) so a crash never truncates your file
 - External-change detection via `QFileSystemWatcher`
 - Encoding and line-ending (LF / CRLF / CR) detection, preserved on save
@@ -28,7 +35,7 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
 - Encrypted documents are always stored as UTF-8 internally
 
 ### Editing
-- Syntax highlighting for 24 languages (Python, JS/TS, QML, C/C++, Java, C#, Go, Rust,
+- Syntax highlighting for 25 languages (Python, JS/TS, QML, Groovy/Gradle, C/C++, Java, C#, Go, Rust,
   JSON, XML/HTML, CSS, Markdown, YAML, TOML, INI, shell, PowerShell, SQL, Dockerfile,
   diff, log, …), auto-detected from file name, shebang or content, and overridable from
   the toolbar
@@ -39,6 +46,12 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
   reverse lines, trim trailing whitespace, indent / unindent, tabs↔spaces
 - Case conversion (UPPER, lower, Title, tOGGLE), toggle comment (line **or** block
   comment depending on the language), insert timestamp
+- **Format > Pretty Print** for JSON and XML: formats the whole document with the
+  configured spaces/tab indentation and supports undo. Invalid input is reported
+  without changing the document. XML mixed content, CDATA and `xml:space="preserve"`
+  are preserved; XML with a DOCTYPE is not formatted.
+  Also available via **Ctrl+Shift+P**, the **{}** toolbar button, and the editor's
+  right-click menu. Disabled for other languages and read-only documents.
 - Document statistics (characters, words, lines, paragraphs)
 - All transformations go through an undoable range-replacement layer, so `Ctrl+Z` works
 
@@ -129,6 +142,7 @@ Notes:
 | Move line up / down | `Alt+Up` / `Alt+Down` |
 | Join lines | `Ctrl+J` |
 | Toggle comment | `Ctrl+/` |
+| Pretty Print JSON/XML | `Ctrl+Shift+P` |
 | Toggle whitespace display | `Ctrl+Shift+E` |
 | Zoom in / out / reset | `Ctrl++` / `Ctrl+-` / `Ctrl+0` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |

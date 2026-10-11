@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import (
     Property,
     QAbstractListModel,
     QByteArray,
     QFileSystemWatcher,
+    QFile,
     QModelIndex,
     QObject,
     Qt,
@@ -19,8 +23,11 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtQml import QmlElement
+
+if TYPE_CHECKING:
+    from .document import DocumentManager
 
 QML_IMPORT_NAME = "Cipherpad"
 QML_IMPORT_MAJOR_VERSION = 1
@@ -151,6 +158,7 @@ class ProjectExplorer(QAbstractListModel):
     rootFoldersChanged = Signal()
     countChanged = Signal()
     errorOccurred = Signal(str)
+    clipboardChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -158,6 +166,171 @@ class ProjectExplorer(QAbstractListModel):
         self._expanded_paths: set[str] = set()
         self._items: list[ExplorerNode] = []
         self._watcher: QFileSystemWatcher | None = None
+        self._clipboard_path = ""
+        self._clipboard_cut = False
+        self._documents: DocumentManager | None = None
+
+    def bind_documents(self, documents: DocumentManager) -> None:
+        self._documents = documents
+
+    @Property(bool, notify=clipboardChanged)
+    def canPaste(self) -> bool:
+        return bool(self._clipboard_path)
+
+    @Slot(str, result=str)
+    def parentDirectory(self, raw_path: str) -> str:
+        return os.path.dirname(normalize_folder_path(raw_path))
+
+    def _validate_item(self, path: str, destructive: bool = False) -> bool:
+        if not os.path.lexists(path):
+            self.errorOccurred.emit(f"Item not found: {path}")
+            return False
+        if not any(
+            os.path.normcase(path) == os.path.normcase(root)
+            or os.path.normcase(path).startswith(os.path.normcase(root) + os.sep)
+            for root in self._root_folders
+        ):
+            self.errorOccurred.emit("Item must belong to an open explorer folder.")
+            return False
+        if destructive and any(
+            os.path.normcase(root) == os.path.normcase(path)
+            or os.path.normcase(root).startswith(os.path.normcase(path) + os.sep)
+            for root in self._root_folders
+        ):
+            self.errorOccurred.emit("Workspace roots cannot be cut or deleted. Remove them from Explorer instead.")
+            return False
+        if os.path.isjunction(path):
+            self.errorOccurred.emit("Operations on directory junctions are not supported.")
+            return False
+        return True
+
+    @Slot(str, bool, result=bool)
+    def copyItem(self, raw_path: str, cut: bool = False) -> bool:
+        path = normalize_folder_path(raw_path)
+        if not self._validate_item(path, destructive=cut):
+            return False
+        self._clipboard_path = path
+        self._clipboard_cut = cut
+        self.clipboardChanged.emit()
+        return True
+
+    @Slot(str, result=str)
+    def pasteItem(self, raw_directory: str) -> str:
+        if not self._clipboard_path:
+            self.errorOccurred.emit("Copy or cut an explorer item first.")
+            return ""
+        source = self._clipboard_path
+        target = os.path.join(normalize_folder_path(raw_directory), os.path.basename(source))
+        result = self._transfer_item(source, target, self._clipboard_cut)
+        if result and self._clipboard_cut:
+            self._clipboard_path = ""
+            self.clipboardChanged.emit()
+        return result
+
+    @Slot(str, result=str)
+    def duplicateItem(self, raw_path: str) -> str:
+        source = normalize_folder_path(raw_path)
+        if not self._validate_item(source):
+            return ""
+        name = os.path.basename(source)
+        stem, ext = (name, "") if os.path.isdir(source) else os.path.splitext(name)
+        count = 1
+        while True:
+            suffix = " copy" if count == 1 else f" copy {count}"
+            target = os.path.join(os.path.dirname(source), stem + suffix + ext)
+            if not os.path.lexists(target):
+                break
+            count += 1
+        return self._transfer_item(source, target, False)
+
+    def _transfer_item(self, source: str, target: str, move: bool) -> str:
+        if not self._validate_item(source, destructive=move):
+            return ""
+        if not os.path.isdir(os.path.dirname(target)):
+            self.errorOccurred.emit("Paste destination is not a directory.")
+            return ""
+        if os.path.lexists(target):
+            self.errorOccurred.emit(f"Target already exists: {target}")
+            return ""
+        source_real = os.path.normcase(os.path.realpath(source))
+        target_real = os.path.normcase(os.path.realpath(target))
+        if target_real == source_real or target_real.startswith(source_real + os.sep):
+            self.errorOccurred.emit("Cannot copy or move a folder into itself.")
+            return ""
+        try:
+            if move:
+                # Rename is atomic and never leaves a half-deleted source tree.
+                # Cross-volume moves fail explicitly instead of copy-then-delete.
+                self._pause_watching()
+                os.rename(source, target)
+            else:
+                # Stage copies so a failure cannot leave a partial destination.
+                with tempfile.TemporaryDirectory(prefix=".cipherpad-copy-", dir=os.path.dirname(target)) as staging:
+                    staged = os.path.join(staging, "item")
+                    if os.path.isdir(source) and not os.path.islink(source):
+                        for directory, names, _ in os.walk(source, followlinks=False):
+                            if any(os.path.isjunction(os.path.join(directory, name)) for name in names):
+                                raise OSError("Copying a folder containing directory junctions is not supported")
+                        shutil.copytree(source, staged, symlinks=True)
+                    else:
+                        shutil.copy2(source, staged, follow_symlinks=False)
+                    if os.path.lexists(target):
+                        raise FileExistsError(f"Target already exists: {target}")
+                    os.rename(staged, target)
+        except OSError as exc:
+            self.errorOccurred.emit(f"Could not {'move' if move else 'copy'} item: {exc}")
+            self._rebuild_tree()
+            return ""
+        if move:
+            self._relocate_paths(source, target)
+        self._expanded_paths.add(os.path.dirname(target))
+        self._rebuild_tree()
+        return target
+
+    def _relocate_paths(self, old_path: str, new_path: str) -> None:
+        def relocated(path: str) -> str:
+            if os.path.normcase(path) == os.path.normcase(old_path):
+                return new_path
+            if os.path.normcase(path).startswith(os.path.normcase(old_path) + os.sep):
+                return new_path + path[len(old_path):]
+            return path
+
+        updated_roots = [relocated(path) for path in self._root_folders]
+        if updated_roots != self._root_folders:
+            self._root_folders = updated_roots
+            self.rootFoldersChanged.emit()
+        self._expanded_paths = {relocated(path) for path in self._expanded_paths}
+        if self._clipboard_path:
+            self._clipboard_path = relocated(self._clipboard_path)
+            self.clipboardChanged.emit()
+        if self._documents is not None:
+            self._documents.relocate_documents(old_path, new_path)
+
+    def _pause_watching(self) -> None:
+        # Windows directory watcher handles can prevent ancestor renames/deletes.
+        if self._watcher is not None:
+            paths = self._watcher.directories()
+            if paths:
+                self._watcher.removePaths(paths)
+
+    @Slot(str, result=bool)
+    def revealItem(self, raw_path: str) -> bool:
+        path = normalize_folder_path(raw_path)
+        if not os.path.lexists(path):
+            self.errorOccurred.emit(f"Item not found: {path}")
+            return False
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer.exe", "/select,", path])
+            elif not QDesktopServices.openUrl(QUrl.fromLocalFile(
+                path if os.path.isdir(path) else os.path.dirname(path)
+            )):
+                self.errorOccurred.emit("Could not open the system file manager.")
+                return False
+        except OSError as exc:
+            self.errorOccurred.emit(f"Could not reveal item: {exc}")
+            return False
+        return True
 
     # ------------------------------------------------------- model plumbing
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
@@ -475,7 +648,7 @@ class ProjectExplorer(QAbstractListModel):
             self.errorOccurred.emit(f"File already exists: {file_path}")
             return ""
         try:
-            with open(file_path, "w", encoding="utf-8") as f:
+            with open(file_path, "x", encoding="utf-8") as f:
                 f.write("")
         except OSError as exc:
             self.errorOccurred.emit(f"Could not create file: {exc}")
@@ -500,7 +673,7 @@ class ProjectExplorer(QAbstractListModel):
             self.errorOccurred.emit(f"Folder already exists: {folder_path}")
             return ""
         try:
-            os.makedirs(folder_path, exist_ok=True)
+            os.mkdir(folder_path)
         except OSError as exc:
             self.errorOccurred.emit(f"Could not create folder: {exc}")
             return ""
@@ -516,23 +689,26 @@ class ProjectExplorer(QAbstractListModel):
 
     @Slot(str, result=bool)
     def deleteItem(self, raw_path: str) -> bool:
-        """Delete a file or directory."""
+        """Move a non-root item to the system Trash/Recycle Bin."""
         path = normalize_folder_path(raw_path)
-        if not os.path.exists(path):
+        if not self._validate_item(path, destructive=True):
             return False
-        try:
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-            else:
-                os.unlink(path)
-        except OSError as exc:
-            self.errorOccurred.emit(f"Could not delete: {exc}")
+        documents = self._documents.documents_under_path(path) if self._documents is not None else []
+        if any(doc.modified for doc in documents):
+            self.errorOccurred.emit("Save or close unsaved documents in this item before deleting it.")
             return False
-        if path in self._root_folders:
-            self._root_folders.remove(path)
-            self.rootFolderCountChanged.emit()
-            self.rootFoldersChanged.emit()
-        self._expanded_paths = {p for p in self._expanded_paths if not p.startswith(path)}
+        self._pause_watching()
+        if not QFile.moveToTrash(path):
+            self.errorOccurred.emit(f"Could not move item to Trash/Recycle Bin: {path}")
+            self._rebuild_tree()
+            return False
+        if self._documents is not None:
+            for doc in documents:
+                self._documents.closeDocument(self._documents.indexOf(doc))
+        if self._clipboard_path == path or self._clipboard_path.startswith(path + os.sep):
+            self._clipboard_path = ""
+            self.clipboardChanged.emit()
+        self._expanded_paths = {p for p in self._expanded_paths if p != path and not p.startswith(path + os.sep)}
         self._rebuild_tree()
         return True
 
@@ -545,6 +721,7 @@ class ProjectExplorer(QAbstractListModel):
             return ""
         old_norm = normalize_folder_path(old_path)
         if not os.path.exists(old_norm):
+            self.errorOccurred.emit(f"Item not found: {old_norm}")
             return ""
         parent_dir = os.path.dirname(old_norm)
         new_path = os.path.join(parent_dir, entry_name)
@@ -560,34 +737,24 @@ class ProjectExplorer(QAbstractListModel):
             self.errorOccurred.emit("Name must be a single file or folder name.")
             return False
         old_norm = normalize_folder_path(old_path)
-        if not os.path.exists(old_norm):
+        if not self._validate_item(old_norm):
             return False
         parent_dir = os.path.dirname(old_norm)
         new_path = os.path.join(parent_dir, entry_name)
-        if os.path.exists(new_path):
+        if new_path == old_norm:
+            return True
+        if os.path.lexists(new_path) and os.path.normcase(new_path) != os.path.normcase(old_norm):
             self.errorOccurred.emit(f"Target already exists: {new_path}")
             return False
         try:
+            self._pause_watching()
             os.rename(old_norm, new_path)
         except OSError as exc:
             self.errorOccurred.emit(f"Could not rename: {exc}")
+            self._rebuild_tree()
             return False
 
-        if old_norm in self._root_folders:
-            idx = self._root_folders.index(old_norm)
-            self._root_folders[idx] = new_path
-            self.rootFoldersChanged.emit()
-
-        new_expanded: set[str] = set()
-        for p in self._expanded_paths:
-            if p == old_norm:
-                new_expanded.add(new_path)
-            elif p.startswith(old_norm + os.sep):
-                new_expanded.add(new_path + p[len(old_norm) :])
-            else:
-                new_expanded.add(p)
-        self._expanded_paths = new_expanded
-
+        self._relocate_paths(old_norm, new_path)
         self._rebuild_tree()
         return True
 
@@ -682,6 +849,7 @@ class ProjectExplorer(QAbstractListModel):
 
     def _update_watcher(self) -> None:
         if self._watcher is not None:
+            self._pause_watching()
             self._watcher.deleteLater()
             self._watcher = None
 

@@ -11,6 +11,11 @@ Rectangle {
     color: Prefs.chrome
 
     signal openFileRequested(string path)
+    property string selectedPath: ""
+    property bool selectedIsDir: false
+    readonly property string targetDirectory: selectedPath
+        ? (selectedIsDir ? selectedPath : Explorer.parentDirectory(selectedPath))
+        : (Explorer.rootFolders.length > 0 ? Explorer.rootFolders[0] : "")
 
     function openAddFolderDialog() {
         folderDialog.open()
@@ -27,30 +32,43 @@ Rectangle {
 
     AppDialog {
         id: nameDialog
+        objectName: "explorerNameDialog"
         property string itemType: "file" // "file" | "folder"
         property string parentDir: ""
-        heading: itemType === "file" ? "New File" : "New Folder"
+        property string sourcePath: ""
+        heading: itemType === "rename" ? "Rename Item" : (itemType === "file" ? "New File" : "New Folder")
         standardButtons: Dialog.Ok | Dialog.Cancel
         width: 360
 
         function prompt(type, dir) {
             itemType = type
             parentDir = dir
+            sourcePath = ""
             nameField.text = ""
             open()
             nameField.forceActiveFocus()
+        }
+
+        function promptRename(path, name) {
+            itemType = "rename"
+            sourcePath = path
+            nameField.text = name
+            open()
+            nameField.forceActiveFocus()
+            nameField.selectAll()
         }
 
         ColumnLayout {
             width: parent.width
             spacing: 8
             Label {
-                text: nameDialog.itemType === "file" ? "File name:" : "Folder name:"
+                text: nameDialog.itemType === "rename" ? "New name:" : (nameDialog.itemType === "file" ? "File name:" : "Folder name:")
                 color: Prefs.chromeText
                 font.pixelSize: Math.max(11, Prefs.fontSize - 1)
             }
             EditorTextField {
                 id: nameField
+                objectName: "explorerNameField"
                 Layout.fillWidth: true
                 placeholderText: nameDialog.itemType === "file" ? "e.g. main.py, notes.txt" : "e.g. src, docs"
                 onAccepted: nameDialog.accept()
@@ -59,14 +77,45 @@ Rectangle {
 
         onAccepted: {
             const name = nameField.text.trim()
-            if (!name) return
-            if (itemType === "file") {
+            if (itemType === "rename") {
+                const renamed = Explorer.rename(sourcePath, name)
+                if (renamed && root.selectedPath === sourcePath)
+                    root.selectedPath = renamed
+            } else if (itemType === "file") {
                 const created = Explorer.createFile(parentDir, name)
                 if (created) {
                     root.openFileRequested(created)
                 }
             } else {
                 Explorer.createFolder(parentDir, name)
+            }
+        }
+    }
+
+    AppDialog {
+        id: deleteDialog
+        objectName: "explorerDeleteDialog"
+        heading: "Delete Item"
+        standardButtons: Dialog.Yes | Dialog.Cancel
+        width: 420
+        property string targetPath: ""
+        property string targetName: ""
+        function prompt(path, name) {
+            targetPath = path
+            targetName = name
+            open()
+        }
+        Label {
+            width: parent.width
+            text: "Move \"" + deleteDialog.targetName
+                  + "\" to Trash/Recycle Bin? All contents of a folder are included."
+            color: Prefs.chromeText
+            wrapMode: Text.Wrap
+        }
+        onAccepted: {
+            if (Explorer.deleteItem(targetPath)) {
+                root.selectedPath = ""
+                root.selectedIsDir = false
             }
         }
     }
@@ -137,6 +186,37 @@ Rectangle {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: 6
+            Layout.rightMargin: 6
+            visible: Explorer.rootFolderCount > 0
+            spacing: 2
+            BarButton {
+                objectName: "explorerNewFileButton"
+                text: "+F"
+                tip: "New File in Selected Folder"
+                enabled: root.targetDirectory !== ""
+                onClicked: nameDialog.prompt("file", root.targetDirectory)
+            }
+            BarButton {
+                objectName: "explorerNewFolderButton"
+                text: "+D"
+                tip: "New Folder in Selected Folder"
+                enabled: root.targetDirectory !== ""
+                onClicked: nameDialog.prompt("folder", root.targetDirectory)
+            }
+            BarButton {
+                objectName: "explorerPasteButton"
+                text: "Paste"
+                tip: "Paste Copied/Cut Explorer Item"
+                enabled: Explorer.canPaste && root.targetDirectory !== ""
+                implicitWidth: 48
+                onClicked: Explorer.pasteItem(root.targetDirectory)
+            }
+            Item { Layout.fillWidth: true }
+        }
+
         // ---------------------------------------------------- empty state
         Item {
             Layout.fillWidth: true
@@ -193,6 +273,7 @@ Rectangle {
 
             delegate: Rectangle {
                 id: delegateItem
+                objectName: "explorerItem:" + path
                 width: treeView.width
                 implicitHeight: 24
 
@@ -228,6 +309,8 @@ Rectangle {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
 
                     onClicked: function (mouse) {
+                        root.selectedPath = delegateItem.path
+                        root.selectedIsDir = delegateItem.isDir
                         if (mouse.button === Qt.LeftButton) {
                             if (delegateItem.isDir) {
                                 Explorer.toggleExpanded(delegateItem.path)
@@ -298,6 +381,7 @@ Rectangle {
 
                 AppMenu {
                     id: itemContextMenu
+                    objectName: "explorerItemMenu"
 
                     // Hidden menu entries still occupy space in a Menu, so
                     // conditional entries collapse their height when hidden.
@@ -310,18 +394,50 @@ Rectangle {
 
                     AppMenuItem {
                         text: "New File\u2026"
-                        visible: delegateItem.isDir
-                        height: visible ? implicitHeight : 0
-                        onTriggered: nameDialog.prompt("file", delegateItem.path)
+                        onTriggered: nameDialog.prompt("file", root.targetDirectory)
                     }
 
                     AppMenuItem {
                         text: "New Folder\u2026"
-                        visible: delegateItem.isDir
-                        height: visible ? implicitHeight : 0
-                        onTriggered: nameDialog.prompt("folder", delegateItem.path)
+                        onTriggered: nameDialog.prompt("folder", root.targetDirectory)
                     }
 
+                    MenuSeparator {}
+                    AppMenuItem {
+                        objectName: "explorerRenameItem"
+                        text: "Rename\u2026"
+                        onTriggered: nameDialog.promptRename(delegateItem.path, delegateItem.name)
+                    }
+                    AppMenuItem {
+                        objectName: "explorerDuplicateItem"
+                        text: "Duplicate"
+                        enabled: !delegateItem.isRoot
+                        onTriggered: Explorer.duplicateItem(delegateItem.path)
+                    }
+                    AppMenuItem {
+                        objectName: "explorerCutItem"
+                        text: "Cut"
+                        enabled: !delegateItem.isRoot
+                        onTriggered: Explorer.copyItem(delegateItem.path, true)
+                    }
+                    AppMenuItem {
+                        objectName: "explorerCopyItem"
+                        text: "Copy"
+                        onTriggered: Explorer.copyItem(delegateItem.path, false)
+                    }
+                    AppMenuItem {
+                        objectName: "explorerPasteItem"
+                        text: "Paste"
+                        enabled: Explorer.canPaste
+                        onTriggered: Explorer.pasteItem(root.targetDirectory)
+                    }
+                    AppMenuItem {
+                        objectName: "explorerDeleteItem"
+                        text: "Delete\u2026"
+                        enabled: !delegateItem.isRoot
+                        onTriggered: deleteDialog.prompt(delegateItem.path, delegateItem.name)
+                    }
+                    MenuSeparator {}
                     AppMenuItem {
                         text: "Refresh"
                         visible: delegateItem.isDir
@@ -346,6 +462,14 @@ Rectangle {
                     AppMenuItem {
                         text: "Copy Path"
                         onTriggered: Explorer.copyToClipboard(delegateItem.path)
+                    }
+                    AppMenuItem {
+                        text: "Copy Relative Path"
+                        onTriggered: Explorer.copyPathToClipboard(delegateItem.path, true)
+                    }
+                    AppMenuItem {
+                        text: "Reveal in File Explorer"
+                        onTriggered: Explorer.revealItem(delegateItem.path)
                     }
                 }
             }

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QFile, Qt
 
 from cipherpad.explorer import ProjectExplorer
 
@@ -264,9 +266,14 @@ def test_rename_rejects_path_name(explorer: ProjectExplorer, sample_tree: Path) 
     assert errors
 
 
-def test_delete_item(explorer: ProjectExplorer, sample_tree: Path) -> None:
+def test_delete_item(explorer: ProjectExplorer, sample_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     explorer.addFolder(str(sample_tree))
     target = sample_tree / "main.py"
+    def trash(path: str) -> bool:
+        assert path == str(target)
+        target.unlink()
+        return True
+    monkeypatch.setattr(QFile, "moveToTrash", trash)
     assert target.exists()
     assert explorer.deleteItem(str(target))
     assert not target.exists()
@@ -290,3 +297,223 @@ def test_copy_path_to_clipboard(explorer: ProjectExplorer, sample_tree: Path) ->
 
     assert explorer.copyPathToClipboard(file_path, relative=False)
     assert explorer.copyPathToClipboard(file_path, relative=True)
+
+
+def test_duplicate_files_and_folders(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    assert explorer.duplicateItem(str(sample_tree / "main.py")) == str(sample_tree / "main copy.py")
+    assert explorer.duplicateItem(str(sample_tree / "main.py")) == str(sample_tree / "main copy 2.py")
+    assert (sample_tree / "main copy.py").read_bytes() == (sample_tree / "main.py").read_bytes()
+    result = explorer.duplicateItem(str(sample_tree / "src"))
+    assert result == str(sample_tree / "src copy")
+    assert (sample_tree / "src copy" / "nested" / "deep.txt").read_text() == "deep"
+
+
+@pytest.mark.parametrize("cut", [False, True])
+def test_copy_cut_paste(explorer: ProjectExplorer, sample_tree: Path, cut: bool) -> None:
+    explorer.addFolder(str(sample_tree))
+    source = sample_tree / "main.py"
+    assert not explorer.canPaste
+    assert explorer.copyItem(str(source), cut)
+    assert explorer.canPaste
+    target = sample_tree / "src" / "main.py"
+    assert explorer.pasteItem(str(target.parent)) == str(target)
+    assert target.read_text() == "print(1)"
+    assert source.exists() != cut
+    assert explorer.canPaste != cut
+
+
+def test_paste_conflict_preserves_both_items(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    source = sample_tree / "main.py"
+    target = sample_tree / "src" / "main.py"
+    target.write_text("existing")
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+    explorer.copyItem(str(source), True)
+    assert explorer.pasteItem(str(target.parent)) == ""
+    assert source.read_text() == "print(1)"
+    assert target.read_text() == "existing"
+    assert explorer.canPaste
+    assert "already exists" in errors[-1]
+
+
+def test_copy_folder_into_descendant_rejected(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    source = sample_tree / "src"
+    explorer.copyItem(str(source), False)
+    assert explorer.pasteItem(str(source / "nested")) == ""
+    assert not (source / "nested" / "src").exists()
+
+
+def test_root_cut_delete_rejected(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+    assert not explorer.copyItem(str(sample_tree), True)
+    assert not explorer.deleteItem(str(sample_tree))
+    assert sample_tree.exists()
+    assert len(errors) == 2
+
+
+def test_missing_item_errors(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+    path = str(sample_tree / "missing")
+    assert not explorer.copyItem(path, False)
+    assert not explorer.deleteItem(path)
+    assert not explorer.renameItem(path, "new")
+    assert len(errors) == 3
+
+
+def test_failed_copy_leaves_no_partial_destination(
+    explorer: ProjectExplorer, sample_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    explorer.addFolder(str(sample_tree))
+    def failed_copy(source: str, target: str, **kwargs) -> None:
+        Path(target).write_text("partial")
+        raise OSError("test copy failure")
+    monkeypatch.setattr(shutil, "copy2", failed_copy)
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+    assert explorer.duplicateItem(str(sample_tree / "main.py")) == ""
+    assert not (sample_tree / "main copy.py").exists()
+    assert not list(sample_tree.glob(".cipherpad-copy-*"))
+    assert "test copy failure" in errors[-1]
+
+
+def test_failed_cut_preserves_source_and_clipboard(
+    explorer: ProjectExplorer, sample_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    explorer.addFolder(str(sample_tree))
+    source = sample_tree / "main.py"
+    explorer.copyItem(str(source), True)
+    def failed_move(*args) -> None:
+        raise OSError("cross-volume move")
+    monkeypatch.setattr(os, "rename", failed_move)
+    assert explorer.pasteItem(str(sample_tree / "src")) == ""
+    assert source.exists()
+    assert explorer.canPaste
+
+
+def test_rename_and_move_update_open_documents(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    from cipherpad.document import DocumentManager
+    manager = DocumentManager()
+    explorer.bind_documents(manager)
+    explorer.addFolder(str(sample_tree))
+    source = sample_tree / "src" / "app.py"
+    manager.openFile(str(source))
+    doc = manager.currentDocument
+    doc.modified = True
+    explorer.expand(str(sample_tree / "src"))
+    renamed = sample_tree / "source"
+    assert explorer.rename(str(sample_tree / "src"), "source") == str(renamed)
+    assert doc.filePath == str(renamed / "app.py")
+    assert doc.modified
+    assert doc._watcher.files() == [str(renamed / "app.py")]
+    assert explorer.isExpanded(str(renamed))
+    explorer.copyItem(str(renamed / "app.py"), True)
+    assert explorer.pasteItem(str(sample_tree)) == str(sample_tree / "app.py")
+    assert doc.filePath == str(sample_tree / "app.py")
+    assert doc.modified
+    assert doc._watcher.files() == [str(sample_tree / "app.py")]
+    manager.closeAll()
+
+
+def test_delete_blocks_unsaved_documents(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    from cipherpad.document import DocumentManager
+    manager = DocumentManager()
+    explorer.bind_documents(manager)
+    explorer.addFolder(str(sample_tree))
+    source = sample_tree / "src" / "app.py"
+    manager.openFile(str(source))
+    manager.currentDocument.modified = True
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+    assert not explorer.deleteItem(str(source.parent))
+    assert source.exists()
+    assert "unsaved" in errors[-1]
+    manager.closeAll()
+
+
+def test_delete_closes_clean_documents(
+    explorer: ProjectExplorer, sample_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cipherpad.document import DocumentManager
+    manager = DocumentManager()
+    explorer.bind_documents(manager)
+    explorer.addFolder(str(sample_tree))
+    source = sample_tree / "main.py"
+    manager.openFile(str(source))
+    def trash(path: str) -> bool:
+        assert path == str(source)
+        source.unlink()
+        return True
+    monkeypatch.setattr(QFile, "moveToTrash", trash)
+    explorer.copyItem(str(source), False)
+    assert explorer.deleteItem(str(source))
+    assert manager.count == 0
+    assert not explorer.canPaste
+
+
+def test_delete_trash_failure_preserves_file(
+    explorer: ProjectExplorer, sample_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    explorer.addFolder(str(sample_tree))
+    monkeypatch.setattr(QFile, "moveToTrash", lambda path: False)
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+    assert not explorer.deleteItem(str(sample_tree / "main.py"))
+    assert (sample_tree / "main.py").exists()
+    assert "Trash" in errors[-1]
+
+
+def test_reveal_in_file_explorer(
+    explorer: ProjectExplorer, sample_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cipherpad import explorer as module
+    calls: list[list[str]] = []
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "Popen", lambda args: calls.append(args))
+    path = str(sample_tree / "main.py")
+    assert explorer.revealItem(path)
+    assert calls == [["explorer.exe", "/select,", path]]
+
+
+def test_rename_folder_updates_nested_workspace_roots(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    nested = sample_tree / "src" / "nested"
+    explorer.addFolder(str(nested))
+    assert explorer.rename(str(sample_tree / "src"), "source")
+    assert explorer.rootFolders == [str(sample_tree), str(sample_tree / "source" / "nested")]
+
+
+def test_item_outside_workspace_rejected(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree / "src"))
+    outside = sample_tree / "main.py"
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+    assert not explorer.deleteItem(str(outside))
+    assert not explorer.renameItem(str(outside), "renamed.py")
+    assert outside.exists()
+    assert len(errors) == 2
+
+
+def test_copy_folder_paste(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    destination = sample_tree / "destination"
+    destination.mkdir()
+    explorer.copyItem(str(sample_tree / "src"), False)
+    assert explorer.pasteItem(str(destination)) == str(destination / "src")
+    assert (destination / "src" / "nested" / "deep.txt").read_text() == "deep"
+    assert (sample_tree / "src" / "nested" / "deep.txt").exists()
+
+
+def test_rename_case_only(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    source = sample_tree / "main.py"
+    target = sample_tree / "Main.py"
+    assert explorer.rename(str(source), target.name) == str(target)
+    assert target.read_text() == "print(1)"
+    assert target.name in [entry.name for entry in sample_tree.iterdir()]
