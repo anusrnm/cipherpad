@@ -105,6 +105,21 @@ def get_file_type(name: str, is_dir: bool) -> str:
     return FILE_EXTENSIONS.get(ext, "file")
 
 
+def _entry_name(raw_name: str) -> str | None:
+    name = raw_name.strip()
+    if (
+        not name
+        or name in {".", ".."}
+        or "\x00" in name
+        or "/" in name
+        or "\\" in name
+        or os.path.isabs(name)
+        or os.path.splitdrive(name)[0]
+    ):
+        return None
+    return name
+
+
 @dataclass
 class ExplorerNode:
     path: str
@@ -447,11 +462,15 @@ class ProjectExplorer(QAbstractListModel):
     @Slot(str, str, result=str)
     def createFile(self, parent_dir: str, name: str) -> str:
         """Create a new file in parent_dir."""
+        entry_name = _entry_name(name)
+        if entry_name is None:
+            self.errorOccurred.emit("Name must be a single file name.")
+            return ""
         parent_norm = normalize_folder_path(parent_dir)
         if not os.path.isdir(parent_norm):
             self.errorOccurred.emit(f"Parent directory not found: {parent_norm}")
             return ""
-        file_path = os.path.join(parent_norm, name.strip())
+        file_path = os.path.join(parent_norm, entry_name)
         if os.path.exists(file_path):
             self.errorOccurred.emit(f"File already exists: {file_path}")
             return ""
@@ -468,11 +487,15 @@ class ProjectExplorer(QAbstractListModel):
     @Slot(str, str, result=str)
     def createFolder(self, parent_dir: str, name: str) -> str:
         """Create a new subfolder in parent_dir."""
+        entry_name = _entry_name(name)
+        if entry_name is None:
+            self.errorOccurred.emit("Name must be a single folder name.")
+            return ""
         parent_norm = normalize_folder_path(parent_dir)
         if not os.path.isdir(parent_norm):
             self.errorOccurred.emit(f"Parent directory not found: {parent_norm}")
             return ""
-        folder_path = os.path.join(parent_norm, name.strip())
+        folder_path = os.path.join(parent_norm, entry_name)
         if os.path.exists(folder_path):
             self.errorOccurred.emit(f"Folder already exists: {folder_path}")
             return ""
@@ -516,23 +539,31 @@ class ProjectExplorer(QAbstractListModel):
     @Slot(str, str, result=str)
     def rename(self, old_path: str, new_name: str) -> str:
         """Rename item and return new path on success, or empty string on failure."""
+        entry_name = _entry_name(new_name)
+        if entry_name is None:
+            self.errorOccurred.emit("Name must be a single file or folder name.")
+            return ""
         old_norm = normalize_folder_path(old_path)
         if not os.path.exists(old_norm):
             return ""
         parent_dir = os.path.dirname(old_norm)
-        new_path = os.path.join(parent_dir, new_name.strip())
-        if self.renameItem(old_path, new_name):
+        new_path = os.path.join(parent_dir, entry_name)
+        if self.renameItem(old_path, entry_name):
             return new_path
         return ""
 
     @Slot(str, str, result=bool)
     def renameItem(self, old_path: str, new_name: str) -> bool:
         """Rename a file or folder to new_name in the same parent directory."""
+        entry_name = _entry_name(new_name)
+        if entry_name is None:
+            self.errorOccurred.emit("Name must be a single file or folder name.")
+            return False
         old_norm = normalize_folder_path(old_path)
         if not os.path.exists(old_norm):
             return False
         parent_dir = os.path.dirname(old_norm)
-        new_path = os.path.join(parent_dir, new_name.strip())
+        new_path = os.path.join(parent_dir, entry_name)
         if os.path.exists(new_path):
             self.errorOccurred.emit(f"Target already exists: {new_path}")
             return False

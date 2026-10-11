@@ -155,10 +155,11 @@ def test_encrypt_with_converts_existing_file(doc: Document, tmp_path: Path) -> N
     assert crypto.is_encrypted(target.read_bytes())
 
 
-def test_encrypt_with_on_untitled_defers_to_save(doc: Document) -> None:
-    assert doc.encryptWith("text", "pw")
-    assert doc.encrypted
-    assert doc.modified
+def test_encrypt_with_on_untitled_requires_save(doc: Document) -> None:
+    messages = errors(doc)
+    assert doc.encryptWith("text", "pw") is False
+    assert not doc.encrypted
+    assert messages
 
 
 def test_encrypt_with_requires_passphrase(doc: Document) -> None:
@@ -373,6 +374,27 @@ def test_close_document_updates_current_index(manager: DocumentManager) -> None:
     manager.newDocument()
     assert manager.closeDocument(1)
     assert manager.count == 1
+    assert manager.currentIndex == 0
+
+
+def test_close_non_current_document_preserves_active_document(manager: DocumentManager) -> None:
+    manager.newDocument()
+    manager.newDocument()
+    active_index = manager.newDocument()
+    active_document = manager.currentDocument
+
+    assert manager.closeDocument(0)
+    assert manager.currentIndex == active_index - 1
+    assert manager.currentDocument is active_document
+
+
+def test_close_document_after_active_document_preserves_active_index(manager: DocumentManager) -> None:
+    manager.newDocument()
+    manager.newDocument()
+    manager.newDocument()
+    manager.currentIndex = 0
+
+    assert manager.closeDocument(2)
     assert manager.currentIndex == 0
 
 

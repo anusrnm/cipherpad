@@ -15,6 +15,7 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
 ### Files
 - Multiple documents in tabs, with per-tab modified indicator and close buttons
 - Open / Save / Save As / Reload from disk, recent-files list, optional session restore
+- Multi-folder project explorer for browsing and managing files and folders
 - Atomic saves (temp file + `os.replace`) so a crash never truncates your file
 - External-change detection via `QFileSystemWatcher`
 - Encoding and line-ending (LF / CRLF / CR) detection, preserved on save
@@ -177,6 +178,7 @@ src/cipherpad/
   search.py         stateless find / replace engine
   textops.py        all text transformations
   gutter.py         layout metrics shared by the editor and line-number gutter
+  explorer.py       multi-folder project explorer model and file operations
   qml/              Main.qml, EditorPane.qml, dialogs and shared components
 tests/              pytest suite
 ```

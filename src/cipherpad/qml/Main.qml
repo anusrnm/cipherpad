@@ -12,10 +12,7 @@ ApplicationWindow {
     visibility: Prefs.windowMaximized ? Window.Maximized : Window.Windowed
     visible: true
     color: Prefs.background
-    font.family: Prefs.fontFamily
     font.pixelSize: Prefs.fontSize
-    font.bold: Prefs.fontBold
-    font.italic: Prefs.fontItalic
     title: (currentDoc
             ? (currentDoc.modified ? "\u2022 " : "") + currentDoc.displayName + " \u2014 "
             : "") + "Cipherpad"
@@ -68,6 +65,19 @@ ApplicationWindow {
     function baseName(path) {
         const parts = String(path).split(/[\\/]/)
         return parts[parts.length - 1]
+    }
+
+    function startEncrypt() {
+        if (!currentDoc || currentDoc.encrypted)
+            return
+        if (currentDoc.isUntitled) {
+            saveDialog.encrypting = true
+            passphraseDialog.intent = "saveAs"
+            saveDialog.open()
+            return
+        }
+        passphraseDialog.intent = "encrypt"
+        passphraseDialog.promptNew(currentDoc.displayName)
     }
 
     function saveCurrent() {
@@ -492,10 +502,7 @@ ApplicationWindow {
                 text: "Encrypt File\u2026"
                 shortcutText: "Ctrl+Shift+E"
                 enabled: window.currentDoc && !window.currentDoc.encrypted
-                onTriggered: {
-                    passphraseDialog.intent = "encrypt"
-                    passphraseDialog.promptNew(window.currentDoc.displayName)
-                }
+                onTriggered: window.startEncrypt()
             }
             AppMenuItem {
                 text: "Change Passphrase\u2026"
@@ -572,12 +579,7 @@ ApplicationWindow {
                 tip: window.currentDoc && window.currentDoc.encrypted
                      ? "File is encrypted" : "Encrypt file (Ctrl+Shift+E)"
                 enabled: window.currentDoc !== null && !window.currentDoc.encrypted
-                onClicked: {
-                    if (!window.currentDoc || window.currentDoc.encrypted)
-                        return
-                    passphraseDialog.intent = "encrypt"
-                    passphraseDialog.promptNew(window.currentDoc.displayName)
-                }
+                onClicked: window.startEncrypt()
             }
 
             Item { Layout.fillWidth: true }
@@ -718,69 +720,61 @@ ApplicationWindow {
                 spacing: 0
 
                 // ----------------------------------------------------------- tabs
-                TabBar {
-                    id: tabBar
+                // A ListView (rather than TabBar) keeps tabs at a fixed width;
+                // TabBar stretches its buttons to fill the available space.
+                Rectangle {
                     Layout.fillWidth: true
+                    Layout.preferredHeight: 30
                     visible: Documents.count > 0
-                    currentIndex: Documents.currentIndex
-                    onCurrentIndexChanged: Documents.currentIndex = currentIndex
-                    background: Rectangle {
-                        color: Prefs.chrome
-                        Rectangle {
-                            anchors.bottom: parent.bottom
-                            width: parent.width
-                            height: 1
-                            color: Prefs.border
-                        }
+                    color: Prefs.chrome
+
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        width: parent.width
+                        height: 1
+                        color: Prefs.border
                     }
 
-                    Repeater {
+                    ListView {
+                        id: tabBar
+                        anchors.fill: parent
+                        orientation: ListView.Horizontal
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        interactive: contentWidth > width
                         model: Documents
-                        TabButton {
+
+                        Connections {
+                            target: Documents
+                            function onCurrentIndexChanged() {
+                                if (Documents.currentIndex >= 0)
+                                    tabBar.positionViewAtIndex(Documents.currentIndex, ListView.Contain)
+                            }
+                        }
+
+                        WheelHandler {
+                            acceptedDevices: PointerDevice.Mouse
+                            onWheel: (event) => {
+                                const delta = event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x
+                                tabBar.contentX = Math.max(0, Math.min(tabBar.contentWidth - tabBar.width,
+                                                                       tabBar.contentX - delta))
+                            }
+                        }
+
+                        delegate: Item {
                             id: tabButton
                             required property int index
                             required property string title
                             required property bool modified
                             required property bool encrypted
+                            readonly property bool checked: index === Documents.currentIndex
+                            readonly property bool hovered: tabMouse.containsMouse
 
-                            implicitWidth: Math.min(220, Math.max(110, tabLabel.implicitWidth + 54))
-                            implicitHeight: 30
+                            width: 180
+                            height: 30
 
-                            contentItem: Item {
-                                Row {
-                                    anchors.left: parent.left
-                                    anchors.leftMargin: 10
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    spacing: 4
-                                    Text {
-                                        visible: tabButton.encrypted
-                                        text: "\ud83d\udd12"
-                                        color: Prefs.accent
-                                        font.pixelSize: Math.max(10, Prefs.fontSize - 3)
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                    Text {
-                                        id: tabLabel
-                                        text: (tabButton.modified ? "\u2022 " : "") + tabButton.title
-                                        color: Prefs.chromeText
-                                        opacity: tabButton.checked ? 1.0 : 0.65
-                                        elide: Text.ElideMiddle
-                                        font.pixelSize: Math.max(11, Prefs.fontSize - 1)
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                }
-                                BarButton {
-                                    anchors.right: parent.right
-                                    anchors.rightMargin: 4
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    implicitWidth: 18
-                                    implicitHeight: 18
-                                    text: "\u2715"
-                                    onClicked: window.closeTab(tabButton.index)
-                                }
-                            }
-
-                            background: Rectangle {
+                            Rectangle {
+                                anchors.fill: parent
                                 color: tabButton.checked ? Prefs.background
                                        : tabButton.hovered ? Prefs.border : "transparent"
                                 Rectangle {
@@ -796,6 +790,133 @@ ApplicationWindow {
                                     color: tabButton.checked ? Prefs.accent : "transparent"
                                 }
                             }
+
+                            MouseArea {
+                                id: tabMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
+                                onClicked: (mouse) => {
+                                    if (mouse.button === Qt.MiddleButton) {
+                                        window.closeTab(tabButton.index)
+                                        return
+                                    }
+                                    Documents.currentIndex = tabButton.index
+                                    if (mouse.button === Qt.RightButton) {
+                                        tabMenu.tabIndex = tabButton.index
+                                        tabMenu.popup()
+                                    }
+                                }
+                            }
+
+                            Item {
+                                anchors.fill: parent
+                                Row {
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 10
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: 4
+                                    Text {
+                                        id: lockIcon
+                                        visible: tabButton.encrypted
+                                        text: "\ud83d\udd12"
+                                        color: Prefs.accent
+                                        font.pixelSize: Math.max(10, Prefs.fontSize - 3)
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Text {
+                                        id: tabLabel
+                                        text: (tabButton.modified ? "\u2022 " : "") + tabButton.title
+                                        color: Prefs.chromeText
+                                        opacity: tabButton.checked ? 1.0 : 0.65
+                                        elide: Text.ElideMiddle
+                                        width: Math.max(0, tabButton.width - 10 - 4 - 18 - 6
+                                                        - (tabButton.encrypted ? lockIcon.implicitWidth + 4 : 0))
+                                        font.pixelSize: Math.max(11, Prefs.fontSize - 1)
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+                                BarButton {
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 4
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    implicitWidth: 18
+                                    implicitHeight: 18
+                                    text: "\u2715"
+                                    onClicked: window.closeTab(tabButton.index)
+                                }
+                            }
+                        }
+                    }
+
+                    AppMenu {
+                        id: tabMenu
+                        property int tabIndex: -1
+                        readonly property var doc: tabIndex >= 0 && tabIndex < Documents.count
+                                                   ? Documents.documentAt(tabIndex) : null
+
+                        // Closes unmodified tabs in [first, last] except `keep`,
+                        // highest index first so lower indices stay valid.
+                        function closeRange(first, last, keep) {
+                            let kept = 0
+                            for (let i = last; i >= first; --i) {
+                                if (i === keep)
+                                    continue
+                                const d = Documents.documentAt(i)
+                                if (d && d.modified)
+                                    kept++
+                                else
+                                    Documents.closeDocument(i)
+                            }
+                            if (kept > 0)
+                                window.toast(kept + " tab(s) with unsaved changes kept")
+                        }
+
+                        AppMenuItem {
+                            text: "Close"
+                            onTriggered: window.closeTab(tabMenu.tabIndex)
+                        }
+                        AppMenuItem {
+                            text: "Close Others"
+                            enabled: Documents.count > 1
+                            onTriggered: tabMenu.closeRange(0, Documents.count - 1, tabMenu.tabIndex)
+                        }
+                        AppMenuItem {
+                            text: "Close Tabs to the Right"
+                            enabled: tabMenu.tabIndex < Documents.count - 1
+                            onTriggered: tabMenu.closeRange(tabMenu.tabIndex + 1, Documents.count - 1, -1)
+                        }
+                        AppMenuItem {
+                            text: "Close All"
+                            onTriggered: tabMenu.closeRange(0, Documents.count - 1, -1)
+                        }
+
+                        MenuSeparator {
+                            contentItem: Rectangle {
+                                implicitHeight: 1
+                                color: Prefs.border
+                            }
+                        }
+
+                        AppMenuItem {
+                            text: "Save"
+                            onTriggered: {
+                                Documents.currentIndex = tabMenu.tabIndex
+                                window.saveCurrent()
+                            }
+                        }
+                        AppMenuItem {
+                            text: "Encrypt\u2026"
+                            enabled: tabMenu.doc !== null && !tabMenu.doc.encrypted
+                            onTriggered: {
+                                Documents.currentIndex = tabMenu.tabIndex
+                                window.startEncrypt()
+                            }
+                        }
+                        AppMenuItem {
+                            text: "Copy Path"
+                            enabled: tabMenu.doc !== null && !tabMenu.doc.isUntitled
+                            onTriggered: Explorer.copyToClipboard(tabMenu.doc.filePath)
                         }
                     }
                 }
@@ -816,7 +937,6 @@ ApplicationWindow {
                             text: "Cipherpad"
                             color: Prefs.chromeText
                             opacity: 0.25
-                            font.family: Prefs.fontFamily
                             font.pixelSize: Prefs.fontSize + 10
                             font.bold: true
                         }
@@ -826,7 +946,6 @@ ApplicationWindow {
                             text: "Ctrl+N: New File   \u2022   Ctrl+O: Open File   \u2022   Ctrl+Shift+O: Open Folder   \u2022   Ctrl+B: Explorer"
                             color: Prefs.chromeText
                             opacity: 0.4
-                            font.family: Prefs.fontFamily
                             font.pixelSize: Math.max(11, Prefs.fontSize - 1)
                         }
                     }
@@ -978,11 +1097,7 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+Shift+E"
         enabled: window.currentDoc !== null && !window.currentDoc.encrypted
-        onActivated: {
-            if (!window.currentDoc || window.currentDoc.encrypted) return
-            passphraseDialog.intent = "encrypt"
-            passphraseDialog.promptNew(window.currentDoc.displayName)
-        }
+        onActivated: window.startEncrypt()
     }
     Shortcut {
         sequence: "Ctrl+Tab"

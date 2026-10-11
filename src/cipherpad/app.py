@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QUrl
+from PySide6.QtCore import QCoreApplication, QLoggingCategory, QUrl
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
@@ -27,6 +27,8 @@ def _configure_application() -> QGuiApplication:
     # Basic is the only built-in style that allows full visual customisation,
     # which the theming system relies on.
     QQuickStyle.setStyle("Basic")
+    # Windows clipboard contention produces harmless retry noise on copy.
+    QLoggingCategory.setFilterRules("qt.qpa.mime=false")
 
     app = QGuiApplication(sys.argv)
     app.setWindowIcon(QIcon())

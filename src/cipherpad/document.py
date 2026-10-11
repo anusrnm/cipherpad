@@ -303,11 +303,8 @@ class Document(QObject):
             self.errorOccurred.emit("A passphrase is required to encrypt this file.")
             return False
         if not self._file_path:
-            self._encrypted = True
-            self._passphrase = passphrase
-            self.encryptedChanged.emit()
-            self.modified = True
-            return True
+            self.errorOccurred.emit("Save the file before encrypting it.")
+            return False
         if not self._write(self._file_path, text, True, passphrase):
             return False
         self._encrypted = True
@@ -596,6 +593,7 @@ class DocumentManager(QAbstractListModel):
     def closeDocument(self, index: int) -> bool:
         if not 0 <= index < len(self._documents):
             return False
+        current_index = self._current_index
         self.beginRemoveRows(QModelIndex(), index, index)
         document = self._documents.pop(index)
         self.endRemoveRows()
@@ -603,7 +601,12 @@ class DocumentManager(QAbstractListModel):
         document.deleteLater()
 
         self.countChanged.emit()
-        new_index = min(index, len(self._documents) - 1)
+        if current_index > index:
+            new_index = current_index - 1
+        elif current_index == index:
+            new_index = min(index, len(self._documents) - 1)
+        else:
+            new_index = current_index
         self._current_index = -1 if not self._documents else new_index
         self.currentIndexChanged.emit()
         return True

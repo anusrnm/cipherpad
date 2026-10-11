@@ -183,8 +183,12 @@ Rectangle {
             boundsBehavior: Flickable.StopAtBounds
             model: Explorer
 
+            HoverHandler {
+                id: treeHover
+            }
+
             ScrollBar.vertical: ScrollBar {
-                active: treeView.moving || treeView.hovered
+                active: treeView.moving || treeHover.hovered
             }
 
             delegate: Rectangle {
@@ -203,12 +207,38 @@ Rectangle {
                 required property string fileType
                 required property string rootPath
 
-                readonly property bool isCurrentFile: !isDir && window.currentDoc && window.currentDoc.filePath === path
+                readonly property bool isCurrentFile: !isDir && !!window.currentDoc
+                                                      && window.currentDoc.filePath === path
+                readonly property bool rowHovered: rowHover.hovered
 
-                color: delegateMouse.containsMouse ? (isCurrentFile ? Prefs.selection : Prefs.border)
+                color: rowHovered ? (isCurrentFile ? Prefs.selection : Prefs.border)
                        : isCurrentFile ? Prefs.selection
                        : "transparent"
-                opacity: isCurrentFile && !delegateMouse.containsMouse ? 0.45 : (delegateMouse.containsMouse ? 0.7 : 1.0)
+                opacity: isCurrentFile && !rowHovered ? 0.45 : (rowHovered ? 0.7 : 1.0)
+
+                HoverHandler {
+                    id: rowHover
+                }
+
+                // Declared before the row so the row's buttons (e.g. the remove
+                // button) sit on top and receive their own clicks.
+                MouseArea {
+                    id: delegateMouse
+                    anchors.fill: parent
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+
+                    onClicked: function (mouse) {
+                        if (mouse.button === Qt.LeftButton) {
+                            if (delegateItem.isDir) {
+                                Explorer.toggleExpanded(delegateItem.path)
+                            } else {
+                                root.openFileRequested(delegateItem.path)
+                            }
+                        } else if (mouse.button === Qt.RightButton) {
+                            itemContextMenu.popup()
+                        }
+                    }
+                }
 
                 RowLayout {
                     anchors.fill: parent
@@ -241,7 +271,7 @@ Rectangle {
                             return "\ud83d\udcc4"
                         }
                         font.pixelSize: 12
-                        anchors.verticalCenter: parent.verticalCenter
+                        Layout.alignment: Qt.AlignVCenter
                     }
 
                     // Item Name
@@ -249,7 +279,6 @@ Rectangle {
                         Layout.fillWidth: true
                         text: delegateItem.name
                         color: Prefs.chromeText
-                        font.family: Prefs.fontFamily
                         font.pixelSize: Math.max(11, Prefs.fontSize - 2)
                         font.bold: delegateItem.isRoot
                         elide: Text.ElideRight
@@ -258,7 +287,7 @@ Rectangle {
 
                     // Remove button for root folders
                     BarButton {
-                        visible: delegateItem.isRoot && delegateMouse.containsMouse
+                        visible: delegateItem.isRoot && delegateItem.rowHovered
                         text: "\u2715"
                         tip: "Remove from Explorer"
                         implicitWidth: 16
@@ -267,73 +296,54 @@ Rectangle {
                     }
                 }
 
-                MouseArea {
-                    id: delegateMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    acceptedButtons: Qt.LeftButton | Qt.RightButton
-
-                    onClicked: function (mouse) {
-                        if (mouse.button === Qt.LeftButton) {
-                            if (delegateItem.isDir) {
-                                Explorer.toggleExpanded(delegateItem.path)
-                            } else {
-                                root.openFileRequested(delegateItem.path)
-                            }
-                        } else if (mouse.button === Qt.RightButton) {
-                            itemContextMenu.popup()
-                        }
-                    }
-
-                    onDoubleClicked: function () {
-                        if (delegateItem.isDir) {
-                            Explorer.toggleExpanded(delegateItem.path)
-                        } else {
-                            root.openFileRequested(delegateItem.path)
-                        }
-                    }
-                }
-
-                Menu {
+                AppMenu {
                     id: itemContextMenu
 
-                    MenuItem {
+                    // Hidden menu entries still occupy space in a Menu, so
+                    // conditional entries collapse their height when hidden.
+                    AppMenuItem {
                         text: "Open"
                         visible: !delegateItem.isDir
+                        height: visible ? implicitHeight : 0
                         onTriggered: root.openFileRequested(delegateItem.path)
                     }
 
-                    MenuItem {
+                    AppMenuItem {
                         text: "New File\u2026"
                         visible: delegateItem.isDir
+                        height: visible ? implicitHeight : 0
                         onTriggered: nameDialog.prompt("file", delegateItem.path)
                     }
 
-                    MenuItem {
+                    AppMenuItem {
                         text: "New Folder\u2026"
                         visible: delegateItem.isDir
+                        height: visible ? implicitHeight : 0
                         onTriggered: nameDialog.prompt("folder", delegateItem.path)
                     }
 
-                    MenuSeparator {
-                        visible: delegateItem.isDir
-                    }
-
-                    MenuItem {
-                        text: "Remove Folder from Explorer"
-                        visible: delegateItem.isRoot
-                        onTriggered: Explorer.removeFolder(delegateItem.path)
-                    }
-
-                    MenuItem {
+                    AppMenuItem {
                         text: "Refresh"
                         visible: delegateItem.isDir
+                        height: visible ? implicitHeight : 0
                         onTriggered: Explorer.refresh()
                     }
 
-                    MenuSeparator {}
+                    AppMenuItem {
+                        text: "Remove Folder from Explorer"
+                        visible: delegateItem.isRoot
+                        height: visible ? implicitHeight : 0
+                        onTriggered: Explorer.removeFolder(delegateItem.path)
+                    }
 
-                    MenuItem {
+                    MenuSeparator {
+                        contentItem: Rectangle {
+                            implicitHeight: 1
+                            color: Prefs.border
+                        }
+                    }
+
+                    AppMenuItem {
                         text: "Copy Path"
                         onTriggered: Explorer.copyToClipboard(delegateItem.path)
                     }

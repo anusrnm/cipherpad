@@ -216,11 +216,32 @@ def test_create_duplicate_file_fails(explorer: ProjectExplorer, sample_tree: Pat
     assert explorer.createFile(str(sample_tree), "README.md") == ""
 
 
+@pytest.mark.parametrize("name", ["../outside.txt", "..\\outside.txt", "C:\\outside.txt"])
+def test_create_file_rejects_path_names(
+    explorer: ProjectExplorer, sample_tree: Path, name: str
+) -> None:
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+
+    assert explorer.createFile(str(sample_tree), name) == ""
+    assert errors
+    assert not (sample_tree.parent / "outside.txt").exists()
+
+
 def test_create_directory(explorer: ProjectExplorer, sample_tree: Path) -> None:
     explorer.addFolder(str(sample_tree))
     created = explorer.createDirectory(str(sample_tree), "docs")
     assert created != ""
     assert (sample_tree / "docs").is_dir()
+
+
+def test_create_folder_rejects_path_name(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+
+    assert explorer.createFolder(str(sample_tree), "../outside") == ""
+    assert errors
+    assert not (sample_tree.parent / "outside").exists()
 
 
 def test_rename_file(explorer: ProjectExplorer, sample_tree: Path) -> None:
@@ -230,6 +251,17 @@ def test_rename_file(explorer: ProjectExplorer, sample_tree: Path) -> None:
     assert new_path != ""
     assert not old_file.exists()
     assert (sample_tree / "README_OLD.md").exists()
+
+
+def test_rename_rejects_path_name(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    old_file = sample_tree / "README.md"
+    errors: list[str] = []
+    explorer.errorOccurred.connect(errors.append)
+
+    assert explorer.rename(str(old_file), "../outside.md") == ""
+    assert old_file.exists()
+    assert not (sample_tree.parent / "outside.md").exists()
+    assert errors
 
 
 def test_delete_item(explorer: ProjectExplorer, sample_tree: Path) -> None:
@@ -258,4 +290,3 @@ def test_copy_path_to_clipboard(explorer: ProjectExplorer, sample_tree: Path) ->
 
     assert explorer.copyPathToClipboard(file_path, relative=False)
     assert explorer.copyPathToClipboard(file_path, relative=True)
-

@@ -17,7 +17,6 @@ Button {
     contentItem: Text {
         text: control.text
         color: control.checked ? Prefs.background : Prefs.chromeText
-        font.family: Prefs.fontFamily
         font.pixelSize: Math.max(10, Prefs.fontSize - 2)
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter

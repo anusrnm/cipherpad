@@ -18,7 +18,6 @@ Button {
         id: contentLabel
         text: control.text
         color: control.enabled ? Prefs.chromeText : Qt.rgba(0.5, 0.5, 0.5, 0.6)
-        font.family: Prefs.fontFamily
         font.pixelSize: Math.max(11, Prefs.fontSize - 1)
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
