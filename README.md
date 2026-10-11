@@ -66,6 +66,9 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
   match counter, wrap-around, Replace and Replace All
 - Go to line, duplicate / delete / move / join lines, sort (asc/desc), unique lines,
   reverse lines, trim trailing whitespace, indent / unindent, tabs↔spaces
+- **Page Up / Page Down** moves the caret and viewport by one visible page,
+  including wrapped lines. Hold **Shift** to extend or shrink the selection.
+  Navigation also works in read-only documents and targets the focused split pane.
 - Case conversion (UPPER, lower, Title, tOGGLE), toggle comment (line **or** block
   comment depending on the language), insert timestamp
 - **Format > Pretty Print** for JSON and XML: formats the whole document with the

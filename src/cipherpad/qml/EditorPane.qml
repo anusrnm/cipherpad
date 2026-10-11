@@ -341,6 +341,37 @@ Item {
     }
 
     // --------------------------------------------------------- key handling
+    property real pageCursorX: 0
+    property int pageCursorPosition: -1
+    property int pageSelectionAnchor: 0
+
+    function movePage(down, selecting) {
+        const position = editor.cursorPosition
+        const rect = editor.cursorRectangle
+        if (pageCursorPosition !== position) {
+            pageCursorX = rect.x
+            pageSelectionAnchor = editor.selectionStart !== editor.selectionEnd
+                                ? (position === editor.selectionStart ? editor.selectionEnd : editor.selectionStart)
+                                : position
+        }
+        if (!selecting)
+            pageSelectionAnchor = position
+        const distance = Math.max(rect.height, flick.height - rect.height)
+        const targetY = rect.y + rect.height / 2 + (down ? distance : -distance)
+        const lastRect = editor.positionToRectangle(editor.length)
+        const target = targetY < editor.topPadding ? 0
+                     : targetY >= lastRect.y + lastRect.height ? editor.length
+                     : editor.positionAt(pageCursorX, targetY)
+        if (selecting)
+            editor.select(pageSelectionAnchor, target)
+        else
+            editor.cursorPosition = target
+        pageCursorPosition = target
+        flick.contentY = Math.max(0, Math.min(Math.max(0, flick.contentHeight - flick.height),
+                                              flick.contentY + (down ? distance : -distance)))
+        ensureCursorVisible()
+    }
+
     function handleKey(event) {
         if (event.matches(StandardKey.Copy) || event.matches(StandardKey.Cut)) {
             event.accepted = true
@@ -349,6 +380,13 @@ Item {
         }
         if (pane.doc && pane.doc.locked)
             return
+        if ((event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp)
+                && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+            event.accepted = true
+            movePage(event.key === Qt.Key_PageDown, (event.modifiers & Qt.ShiftModifier) !== 0)
+            return
+        }
+        pageCursorPosition = -1
         const tabWidth = Prefs.tabWidth
         const useSpaces = Prefs.insertSpaces
         const hasSelection = editor.selectionStart !== editor.selectionEnd

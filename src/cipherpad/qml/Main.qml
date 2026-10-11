@@ -1199,18 +1199,18 @@ ApplicationWindow {
                 onClicked: Prefs.showProjectExplorer = !Prefs.showProjectExplorer
             }
             ToolSeparator {}
-            BarButton { text: "\uff0b"; tip: "New (Ctrl+N)"; onClicked: window.newFile() }
-            BarButton { text: "\u2b06"; tip: "Open File (Ctrl+O)"; onClicked: openDialog.open() }
+            BarButton { text: "\ud83d\udcc4"; tip: "New (Ctrl+N)"; onClicked: window.newFile() }
+            BarButton { text: "\ud83d\udcd6"; tip: "Open File (Ctrl+O)"; onClicked: openDialog.open() }
             BarButton { text: "\ud83d\udcc2"; tip: "Open Folder (Ctrl+Shift+O)"; onClicked: openFolderDialog.open() }
-            BarButton { text: "\u2b07"; tip: "Save (Ctrl+S)"; enabled: window.currentDoc !== null; onClicked: window.saveCurrent() }
+            BarButton { text: "\ud83d\udcbe"; tip: "Save (Ctrl+S)"; enabled: window.currentDoc !== null; onClicked: window.saveCurrent() }
             ToolSeparator {}
             BarButton { text: "\u21b6"; tip: "Undo"; enabled: window.currentPane !== null; onClicked: if (window.currentPane) window.currentPane.editor.undo() }
             BarButton { text: "\u21b7"; tip: "Redo"; enabled: window.currentPane !== null; onClicked: if (window.currentPane) window.currentPane.editor.redo() }
             ToolSeparator {}
             BarButton { text: "\ud83d\udd0d"; tip: "Find (Ctrl+F)"; onClicked: findBar.open(false) }
-            BarButton { objectName: "quickOpenButton"; action: quickOpenAction; text: "Files"; tip: "Quick Open (Ctrl+P)" }
-            BarButton { objectName: "workspaceSearchToolbarButton"; action: workspaceSearchAction; text: "Search"; tip: "Search Workspace (Ctrl+Shift+F)" }
-            BarButton { objectName: "commandPaletteButton"; action: commandPaletteAction; text: ">"; tip: "Command Palette (F1)" }
+            BarButton { objectName: "quickOpenButton"; action: quickOpenAction; text: "\ud83d\udd70"; tip: "Quick Open (Ctrl+P)" }
+            BarButton { text: "\ud83d\udd0e"; objectName: "workspaceSearchToolbarButton"; action: workspaceSearchAction; tip: "Search Workspace (Ctrl+Shift+F)" }
+            BarButton { objectName: "commandPaletteButton"; action: commandPaletteAction; text: "\ud83d\uddf3"; tip: "Command Pallete (F1)" }
             BarButton { objectName: "splitEditorsButton"; text: "||"; tip: "Toggle Split Editors (Ctrl+Alt+S)"; onClicked: window.toggleSplit() }
             BarButton { objectName: "lockTabButton"; action: lockTabAction; text: window.currentDoc && window.currentDoc.locked ? "Unlock" : "Lock"; tip: "Lock / Unlock Encrypted Tab (Ctrl+Alt+L)" }
             BarButton {

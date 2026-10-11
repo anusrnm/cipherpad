@@ -255,6 +255,62 @@ def _check_ui(directory):
         prefs.showProjectExplorer = True
         manager.openFile(str(first))
         application.processEvents()
+        evaluate("currentPane.editor.text = Array.from({length: 200}, (_, i) => 'line ' + i).join('\\n'); currentPane.goToLine(1)")
+        application.processEvents()
+        QTest.keyClick(window, Qt.Key.Key_PageDown)
+        application.processEvents()
+        assert evaluate("currentPane.currentLine") > 10
+        assert 0 < evaluate("currentPane.editor.cursorRectangle.y") < evaluate("currentPane.height") + 30
+        QTest.keyClick(window, Qt.Key.Key_PageUp)
+        application.processEvents()
+        assert evaluate("currentPane.currentLine") == 1
+        original_text = evaluate("currentPane.editor.text")
+        QTest.keyClick(window, Qt.Key.Key_PageDown, Qt.KeyboardModifier.ShiftModifier)
+        application.processEvents()
+        assert evaluate("currentPane.selectionLength") > 0
+        QTest.keyClick(window, Qt.Key.Key_PageUp, Qt.KeyboardModifier.ShiftModifier)
+        application.processEvents()
+        assert evaluate("currentPane.editor.cursorPosition") == 0
+        assert evaluate("currentPane.selectionLength") == 0
+        assert evaluate("currentPane.editor.text") == original_text
+        manager.currentDocument._read_only = True
+        manager.currentDocument.readOnlyChanged.emit()
+        evaluate("currentPane.editor.cursorPosition = currentPane.editor.length")
+        QTest.keyClick(window, Qt.Key.Key_PageDown)
+        assert evaluate("currentPane.editor.cursorPosition === currentPane.editor.length")
+        QTest.keyClick(window, Qt.Key.Key_PageUp)
+        assert evaluate("currentPane.editor.cursorPosition < currentPane.editor.length")
+        assert evaluate("currentPane.editor.text") == original_text
+        manager.currentDocument._read_only = False
+        manager.currentDocument.readOnlyChanged.emit()
+        evaluate("currentPane.editor.cursorPosition = 0")
+        QTest.keyClick(window, Qt.Key.Key_PageUp)
+        assert evaluate("currentPane.editor.cursorPosition") == 0
+        prefs.wordWrap = True
+        evaluate("currentPane.editor.text = 'wrapped text '.repeat(1500); currentPane.editor.cursorPosition = 0")
+        application.processEvents()
+        QTest.keyClick(window, Qt.Key.Key_PageDown)
+        application.processEvents()
+        assert evaluate("currentPane.currentLine") == 1
+        assert evaluate("currentPane.editor.cursorPosition") > 100
+        assert evaluate("currentPane.editor.cursorRectangle.y") > 100
+        QTest.keyClick(window, Qt.Key.Key_PageUp)
+        application.processEvents()
+        assert evaluate("currentPane.editor.cursorPosition") == 0
+        evaluate("toggleSplit()")
+        application.processEvents()
+        evaluate("currentPane.editor.text = Array.from({length: 200}, (_, i) => 'split ' + i).join('\\n'); currentPane.goToLine(1)")
+        split_doc = manager.currentDocument
+        other_doc = manager.documentAt(1 if manager.currentIndex == 0 else 0)
+        other_pane_position = evaluate("paneAt(Documents.currentIndex === 0 ? 1 : 0).editor.cursorPosition")
+        QTest.keyClick(window, Qt.Key.Key_PageDown)
+        assert manager.currentDocument is split_doc
+        assert evaluate("currentPane.currentLine") > 1
+        assert evaluate("paneAt(Documents.currentIndex === 0 ? 1 : 0).editor.cursorPosition") == other_pane_position
+        evaluate("toggleSplit()")
+        manager.closeDocument(manager.indexOf(other_doc))
+        evaluate("currentPane.focusEditor()")
+        prefs.wordWrap = False
         evaluate("runCommand('pin')")
         evaluate("closeTab(0)")
         assert manager.count == 1 and manager.currentDocument.pinned
