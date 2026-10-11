@@ -180,6 +180,8 @@ DEFAULTS: dict[str, Any] = {
     "trimTrailingWhitespaceOnSave": False,
     "ensureNewlineAtEof": False,
     "restoreSession": True,
+    "showHiddenFiles": False,
+    "workspaceIgnorePatterns": ".git;.svn;.hg;__pycache__;.pytest_cache;.mypy_cache;.tox;.venv;venv;.idea;.vscode;.DS_Store;node_modules;Thumbs.db",
     "defaultEncoding": "utf-8",
     "defaultLineEnding": "lf",
     "searchCaseSensitive": False,
@@ -246,6 +248,8 @@ class Preferences(QObject):
     trimTrailingWhitespaceOnSaveChanged = Signal()
     ensureNewlineAtEofChanged = Signal()
     restoreSessionChanged = Signal()
+    showHiddenFilesChanged = Signal()
+    workspaceIgnorePatternsChanged = Signal()
     defaultEncodingChanged = Signal()
     defaultLineEndingChanged = Signal()
     searchCaseSensitiveChanged = Signal()
@@ -353,6 +357,8 @@ class Preferences(QObject):
     ensureNewlineAtEof = _prop("ensureNewlineAtEof", bool, ensureNewlineAtEofChanged)
     restoreSession = _prop("restoreSession", bool, restoreSessionChanged)
     defaultEncoding = _prop("defaultEncoding", str, defaultEncodingChanged)
+    showHiddenFiles = _prop("showHiddenFiles", bool, showHiddenFilesChanged)
+    workspaceIgnorePatterns = _prop("workspaceIgnorePatterns", str, workspaceIgnorePatternsChanged)
     defaultLineEnding = _prop("defaultLineEnding", str, defaultLineEndingChanged)
     searchCaseSensitive = _prop("searchCaseSensitive", bool, searchCaseSensitiveChanged)
     searchWholeWord = _prop("searchWholeWord", bool, searchWholeWordChanged)

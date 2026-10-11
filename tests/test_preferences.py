@@ -80,6 +80,17 @@ def test_booleans_survive_string_round_trip(prefs: Preferences) -> None:
     assert reopen().showLineNumbers is False
 
 
+def test_workspace_settings_persist(prefs: Preferences) -> None:
+    prefs.showHiddenFiles = True
+    prefs.workspaceIgnorePatterns = "*.tmp;build"
+    prefs.sync()
+    assert reopen().showHiddenFiles is True
+    assert reopen().workspaceIgnorePatterns == "*.tmp;build"
+    prefs.resetToDefaults()
+    assert not prefs.showHiddenFiles
+    assert prefs.workspaceIgnorePatterns == DEFAULTS["workspaceIgnorePatterns"]
+
+
 def test_setter_coerces_types(prefs: Preferences) -> None:
     prefs.fontSize = "18"
     assert prefs.fontSize == 18
@@ -284,4 +295,3 @@ def test_project_explorer_prefs_persist(prefs: Preferences) -> None:
     assert restored.showProjectExplorer is False
     assert restored.projectExplorerWidth == 300
     assert restored.projectFolders() == ["/path/one", "/path/two"]
-

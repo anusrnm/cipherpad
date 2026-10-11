@@ -28,6 +28,28 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
 - Encoding and line-ending (LF / CRLF / CR) detection, preserved on save
 - Refuses to open binary files instead of mangling them
 
+### Workspace navigation
+- **Quick Open** (`Ctrl+P`): fuzzy filename lookup across all workspace folders,
+  including collapsed folders. Use Up/Down and Enter or click a result.
+- **Search Workspace** (`Ctrl+Shift+F`): literal text search with filename globs
+  (for example `*.py;*.qml`), case and whole-word options, and clickable line/column
+  results. Searches saved files on disk, not unsaved editor buffers; stale results
+  and modified tabs are reported rather than selecting an incorrect location.
+- Cancellable background scans, capped at 20,000 entries and 1,000 search matches.
+  Search skips binary files, encrypted containers (regardless of extension),
+  `.enc`/`.aes` files and files above 2 MiB. Workspace discovery does not follow
+  symlinks or directory junctions. Limits, skips and read failures are reported.
+- **Command Palette** (`F1`): searchable file, editing, formatting, workspace and
+  preferences commands. Unavailable commands are disabled. Accessible, along with
+  Quick Open and workspace search, from menus and the toolbar.
+- Explorer filename/path filtering (substring or filename glob) retains ancestor
+  folders and leaves normal expansion state intact. Press Escape to clear.
+- **Preferences > Files > Workspace files** controls hidden-file visibility and
+  semicolon-separated ignore globs. Explicit ignores still apply when hidden files
+  are visible; remove default exclusions to opt in. Explorer, Quick Open and
+  workspace search share these settings. These are application globs, not `.gitignore`
+  parsing rules.
+
 ### Encryption
 - **Save Encrypted As…** writes an encrypted container; opening it prompts for the passphrase
 - **Encrypt File…**, **Change Passphrase…** and **Remove Encryption** on an open document
@@ -136,6 +158,9 @@ Notes:
 | Undo / Redo | `Ctrl+Z` / `Ctrl+Y` |
 | Cut / Copy / Paste / Select All | `Ctrl+X` / `Ctrl+C` / `Ctrl+V` / `Ctrl+A` |
 | Find / Replace | `Ctrl+F` / `Ctrl+H` |
+| Search workspace | `Ctrl+Shift+F` |
+| Quick Open | `Ctrl+P` |
+| Command Palette | `F1` |
 | Find next / previous | `F3` / `Shift+F3` |
 | Go to line | `Ctrl+G` |
 | Duplicate line / Delete line | `Ctrl+D` / `Ctrl+Shift+K` |

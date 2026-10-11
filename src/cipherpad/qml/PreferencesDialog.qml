@@ -379,6 +379,25 @@ AppDialog {
                         }
                     }
 
+                    SectionLabel { text: "Workspace files" }
+                    Check {
+                        text: "Show hidden files (explicit ignores still apply)"
+                        checked: Prefs.showHiddenFiles
+                        onToggled: Prefs.showHiddenFiles = checked
+                    }
+                    Label {
+                        text: "Ignore globs, separated by semicolons (names or relative paths)"
+                        color: Prefs.chromeText
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                    TextField {
+                        objectName: "workspaceIgnoreField"
+                        Layout.fillWidth: true
+                        text: Prefs.workspaceIgnorePatterns
+                        color: Prefs.chromeText
+                        onEditingFinished: Prefs.workspaceIgnorePatterns = text
+                    }
                     SectionLabel { text: "Session" }
                     Check {
                         text: "Reopen last session on startup"

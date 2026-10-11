@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import fnmatch
+import re
 import shutil
 import subprocess
 import sys
@@ -48,6 +50,22 @@ IGNORED_NAMES: Final = {
     "node_modules",
     "Thumbs.db",
 }
+
+
+def is_ignored_path(relative: str, show_hidden: bool, patterns: str) -> bool:
+    path = relative.replace("\\", "/").casefold()
+    parts = path.split("/")
+    if not show_hidden and any(part.startswith(".") for part in parts):
+        return True
+    for raw in re.split(r"[;\n]", patterns):
+        pattern = raw.strip().replace("\\", "/").casefold()
+        if pattern and (
+            fnmatch.fnmatchcase(path, pattern)
+            or any(fnmatch.fnmatchcase(part, pattern) for part in parts)
+        ):
+            return True
+    return False
+
 
 FILE_EXTENSIONS: Final = {
     ".py": "python",
@@ -159,6 +177,7 @@ class ProjectExplorer(QAbstractListModel):
     countChanged = Signal()
     errorOccurred = Signal(str)
     clipboardChanged = Signal()
+    optionsChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -169,9 +188,48 @@ class ProjectExplorer(QAbstractListModel):
         self._clipboard_path = ""
         self._clipboard_cut = False
         self._documents: DocumentManager | None = None
+        self._show_hidden = False
+        self._ignore_patterns = ";".join(sorted(IGNORED_NAMES))
+        self._filter_paths: set[str] | None = None
 
     def bind_documents(self, documents: DocumentManager) -> None:
         self._documents = documents
+
+    @Property(bool, notify=optionsChanged)
+    def showHidden(self) -> bool:
+        return self._show_hidden
+
+    @Property(str, notify=optionsChanged)
+    def ignorePatterns(self) -> str:
+        return self._ignore_patterns
+
+    @Slot(bool, str)
+    def configure(self, show_hidden: bool, patterns: str) -> None:
+        if self._show_hidden == show_hidden and self._ignore_patterns == patterns:
+            return
+        self._show_hidden = show_hidden
+        self._ignore_patterns = patterns
+        self._filter_paths = None
+        self._rebuild_tree()
+        self.optionsChanged.emit()
+
+    @Slot("QStringList")
+    def setFilterPaths(self, paths: list[str]) -> None:
+        allowed: set[str] = set()
+        for path in paths:
+            while path and path not in allowed:
+                allowed.add(path)
+                parent = os.path.dirname(path)
+                if parent == path:
+                    break
+                path = parent
+        self._filter_paths = allowed
+        self._rebuild_tree()
+
+    @Slot()
+    def clearFilter(self) -> None:
+        self._filter_paths = None
+        self._rebuild_tree()
 
     @Property(bool, notify=clipboardChanged)
     def canPaste(self) -> bool:
@@ -760,11 +818,7 @@ class ProjectExplorer(QAbstractListModel):
 
     # ------------------------------------------------------------ helpers
     def _is_ignored(self, name: str) -> bool:
-        if name in IGNORED_NAMES:
-            return True
-        if name.startswith(".") and name not in (".", ".."):
-            return True
-        return False
+        return is_ignored_path(name, self._show_hidden, self._ignore_patterns)
 
     def _has_children(self, dir_path: str) -> bool:
         try:
@@ -789,7 +843,7 @@ class ProjectExplorer(QAbstractListModel):
         try:
             with os.scandir(dir_path) as it:
                 for entry in it:
-                    if not self._is_ignored(entry.name):
+                    if not is_ignored_path(os.path.relpath(entry.path, root_path), self._show_hidden, self._ignore_patterns):
                         entries.append(entry)
         except OSError:
             return items
@@ -800,7 +854,9 @@ class ProjectExplorer(QAbstractListModel):
         for entry in entries:
             is_dir = entry.is_dir(follow_symlinks=False)
             path = os.path.normpath(entry.path)
-            expanded = path in self._expanded_paths if is_dir else False
+            if self._filter_paths is not None and path not in self._filter_paths:
+                continue
+            expanded = (self._filter_paths is not None or path in self._expanded_paths) if is_dir else False
             has_children = self._has_children(path) if is_dir else False
             file_type = get_file_type(entry.name, is_dir)
             node = ExplorerNode(
@@ -815,7 +871,7 @@ class ProjectExplorer(QAbstractListModel):
                 root_path=root_path,
             )
             items.append(node)
-            if is_dir and expanded:
+            if is_dir and expanded and not os.path.isjunction(path):
                 items.extend(self._collect_children(path, parent_depth + 1, root_path))
         return items
 
@@ -826,7 +882,7 @@ class ProjectExplorer(QAbstractListModel):
         for root in self._root_folders:
             if not os.path.isdir(root):
                 continue
-            is_expanded = root in self._expanded_paths
+            is_expanded = self._filter_paths is not None or root in self._expanded_paths
             has_children = self._has_children(root)
             root_node = ExplorerNode(
                 path=root,

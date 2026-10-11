@@ -21,6 +21,29 @@ ApplicationWindow {
     property int pendingCloseIndex: -1
     property string pendingAction: ""
     property var pendingPaths: []
+    readonly property bool editableDocument: currentPane !== null && currentDoc !== null && !currentDoc.readOnly
+
+    Action {
+        id: quickOpenAction
+        objectName: "quickOpenAction"
+        text: "Quick Open..."
+        shortcut: "Ctrl+P"
+        onTriggered: workspacePicker.showFiles()
+    }
+    Action {
+        id: workspaceSearchAction
+        objectName: "workspaceSearchAction"
+        text: "Search Workspace..."
+        shortcut: "Ctrl+Shift+F"
+        onTriggered: workspaceSearchDialog.showSearch()
+    }
+    Action {
+        id: commandPaletteAction
+        objectName: "commandPaletteAction"
+        text: "Command Palette..."
+        shortcut: "F1"
+        onTriggered: workspacePicker.showCommands()
+    }
 
     Action {
         id: prettyPrintAction
@@ -43,6 +66,7 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        Explorer.configure(Prefs.showHiddenFiles, Prefs.workspaceIgnorePatterns)
         if (Prefs.windowMaximized)
             showMaximized()
         else
@@ -166,6 +190,96 @@ ApplicationWindow {
         }
         pane.applySpan(span)
         pane.focusEditor()
+    }
+
+    function runCommand(command) {
+        switch (command) {
+        case "new": newFile(); break
+        case "open": openDialog.open(); break
+        case "folder": openFolderDialog.open(); break
+        case "save": saveCurrent(); break
+        case "close": closeTab(Documents.currentIndex); break
+        case "quick": workspacePicker.showFiles(); break
+        case "workspaceSearch": workspaceSearchDialog.showSearch(); break
+        case "find": findBar.open(false); break
+        case "replace": findBar.open(true); break
+        case "goto": gotoDialog.promptFor(currentPane.metrics.lineCount(), currentPane.currentLine); break
+        case "preferences": prefsDialog.open(); break
+        case "pretty": prettyPrint(); break
+        case "undo": currentPane.editor.undo(); break
+        case "redo": currentPane.editor.redo(); break
+        case "selectAll": currentPane.editor.selectAll(); break
+        case "upper": runOp(TextOps.upperCase); break
+        case "lower": runOp(TextOps.lowerCase); break
+        case "trim": runOp(TextOps.trimTrailingWhitespace); break
+        case "unique": runOp(TextOps.uniqueLines); break
+        case "reverse": runOp(TextOps.reverseLines); break
+        case "encrypt": startEncrypt(); break
+        case "wrap": Prefs.wordWrap = !Prefs.wordWrap; break
+        case "explorer": Prefs.showProjectExplorer = !Prefs.showProjectExplorer; break
+        case "hidden": Prefs.showHiddenFiles = !Prefs.showHiddenFiles; break
+        case "zoomIn": Prefs.adjustFontSize(1); break
+        case "zoomOut": Prefs.adjustFontSize(-1); break
+        case "about": aboutDialog.open(); break
+        default: messageDialog.show("Unknown command: " + command)
+        }
+    }
+
+    WorkspacePicker {
+        id: workspacePicker
+        commands: [
+            {command: "new", label: "File: New (Ctrl+N)"},
+            {command: "open", label: "File: Open (Ctrl+O)"},
+            {command: "folder", label: "Workspace: Add Folder (Ctrl+Shift+O)"},
+            {command: "save", label: "File: Save (Ctrl+S)", enabled: window.currentDoc !== null},
+            {command: "close", label: "File: Close Tab", enabled: window.currentDoc !== null},
+            {command: "quick", label: "Workspace: Quick Open (Ctrl+P)"},
+            {command: "workspaceSearch", label: "Workspace: Search (Ctrl+Shift+F)"},
+            {command: "find", label: "Edit: Find (Ctrl+F)", enabled: window.currentPane !== null},
+            {command: "replace", label: "Edit: Replace (Ctrl+H)", enabled: window.editableDocument},
+            {command: "goto", label: "Edit: Go to Line", enabled: window.currentPane !== null},
+            {command: "preferences", label: "Preferences (Ctrl+,)"},
+            {command: "pretty", label: "Format: Pretty Print (Ctrl+Shift+P)", enabled: prettyPrintAction.enabled},
+            {command: "undo", label: "Edit: Undo", enabled: window.editableDocument},
+            {command: "redo", label: "Edit: Redo", enabled: window.editableDocument},
+            {command: "selectAll", label: "Edit: Select All", enabled: window.currentPane !== null},
+            {command: "upper", label: "Format: Uppercase", enabled: window.editableDocument},
+            {command: "lower", label: "Format: Lowercase", enabled: window.editableDocument},
+            {command: "trim", label: "Format: Trim Trailing Whitespace", enabled: window.editableDocument},
+            {command: "unique", label: "Format: Remove Duplicate Lines", enabled: window.editableDocument},
+            {command: "reverse", label: "Format: Reverse Lines", enabled: window.editableDocument},
+            {command: "encrypt", label: "Tools: Encrypt File", enabled: window.currentDoc !== null && !window.currentDoc.encrypted},
+            {command: "wrap", label: "View: Toggle Word Wrap"},
+            {command: "explorer", label: "View: Toggle Explorer (Ctrl+B)"},
+            {command: "hidden", label: "Workspace: Toggle Hidden Files"},
+            {command: "zoomIn", label: "View: Zoom In"},
+            {command: "zoomOut", label: "View: Zoom Out"},
+            {command: "about", label: "Help: About"}
+        ]
+        onFileRequested: function(path) { window.openFiles([path]) }
+        onCommandRequested: function(command) { window.runCommand(command) }
+    }
+
+    WorkspaceSearchDialog {
+        id: workspaceSearchDialog
+        onMatchRequested: function(match) {
+            const index = Documents.indexOfPath(match.path)
+            if (index >= 0 && Documents.documentAt(index).modified) {
+                messageDialog.show("This result refers to the saved file. Save or reload the modified tab and search again.")
+                return
+            }
+            window.openFiles([match.path])
+            if (!window.currentDoc || window.currentDoc.filePath !== match.path || !window.currentPane)
+                return
+            const pane = window.currentPane
+            const start = pane.metrics.positionForLine(match.line) + match.column - 1
+            if (!Workspace.isCurrent(pane.editor.text, match.digest)) {
+                messageDialog.show("The file has changed since the search. Search again to refresh results.")
+                return
+            }
+            pane.selectRange(start, start + match.length)
+            pane.focusEditor()
+        }
     }
 
     // ------------------------------------------------------------- dialogs
@@ -357,6 +471,15 @@ ApplicationWindow {
         target: Explorer
         function onErrorOccurred(message) { messageDialog.show(message) }
     }
+    Connections {
+        target: Workspace
+        function onErrorOccurred(message) { messageDialog.show(message) }
+    }
+    Connections {
+        target: Prefs
+        function onShowHiddenFilesChanged() { Explorer.configure(Prefs.showHiddenFiles, Prefs.workspaceIgnorePatterns) }
+        function onWorkspaceIgnorePatternsChanged() { Explorer.configure(Prefs.showHiddenFiles, Prefs.workspaceIgnorePatterns) }
+    }
 
     // ---------------------------------------------------------------- menu
     menuBar: MenuBar {
@@ -385,6 +508,7 @@ ApplicationWindow {
 
         AppMenu {
             title: "File"
+            AppMenuItem { action: quickOpenAction; shortcutText: "Ctrl+P" }
             AppMenuItem { text: "New"; shortcutText: "Ctrl+N"; onTriggered: window.newFile() }
             AppMenuItem { text: "Open File\u2026"; shortcutText: "Ctrl+O"; onTriggered: openDialog.open() }
             AppMenuItem { text: "Open Folder\u2026"; shortcutText: "Ctrl+Shift+O"; onTriggered: openFolderDialog.open() }
@@ -516,6 +640,8 @@ ApplicationWindow {
 
         AppMenu {
             title: "View"
+            AppMenuItem { action: commandPaletteAction; shortcutText: "F1" }
+            AppMenuItem { action: workspaceSearchAction; shortcutText: "Ctrl+Shift+F" }
             AppMenuItem { text: "Project Explorer"; shortcutText: "Ctrl+B"; checkable: true; checked: Prefs.showProjectExplorer
                 onTriggered: Prefs.showProjectExplorer = !Prefs.showProjectExplorer }
             MenuSeparator {}
@@ -617,6 +743,9 @@ ApplicationWindow {
             BarButton { text: "\u21b7"; tip: "Redo"; enabled: window.currentPane !== null; onClicked: if (window.currentPane) window.currentPane.editor.redo() }
             ToolSeparator {}
             BarButton { text: "\ud83d\udd0d"; tip: "Find (Ctrl+F)"; onClicked: findBar.open(false) }
+            BarButton { objectName: "quickOpenButton"; action: quickOpenAction; text: "Files"; tip: "Quick Open (Ctrl+P)" }
+            BarButton { objectName: "workspaceSearchToolbarButton"; action: workspaceSearchAction; text: "Search"; tip: "Search Workspace (Ctrl+Shift+F)" }
+            BarButton { objectName: "commandPaletteButton"; action: commandPaletteAction; text: ">"; tip: "Command Palette (F1)" }
             BarButton {
                 objectName: "prettyPrintButton"
                 action: prettyPrintAction

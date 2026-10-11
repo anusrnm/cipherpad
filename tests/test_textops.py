@@ -148,10 +148,13 @@ def _check_pretty_print_qml(settings_directory: str) -> None:
     manager = document.DocumentManager()
     project_explorer = explorer.ProjectExplorer()
     project_explorer.bind_documents(manager)
+    from cipherpad.workspace import WorkspaceTools
+    workspace_tools = WorkspaceTools(project_explorer)
     backends = {
         "Prefs": prefs, "Documents": manager, "Search": search.SearchEngine(),
         "TextOps": TextOps(), "Crypto": crypto.CryptoInfo(),
         "Explorer": project_explorer, "appVersion": "test",
+        "Workspace": workspace_tools,
     }
     engine = QQmlApplicationEngine()
     warnings: list[str] = []
@@ -330,8 +333,95 @@ def _check_pretty_print_qml(settings_directory: str) -> None:
         assert not project_explorer.renameItem(str(project / "missing"), "new")
         assert evaluate("messageDialog.visible")
         assert "Item not found" in evaluate("messageDialog.message")
+        evaluate("messageDialog.close()")
+
+        def wait_for_workspace() -> None:
+            import time
+            deadline = time.monotonic() + 5
+            while workspace_tools.busy and time.monotonic() < deadline:
+                QTest.qWait(10)
+            assert not workspace_tools.busy
+            QTest.qWait(50)
+
+        workspace_file = project / "workspace-match.py"
+        workspace_file.write_text("\U0001f600 hello\n", encoding="utf-8")
+        project_explorer.refresh()
+        # Real palette shortcut + Enter executes a shared editor command.
+        QTest.keyClick(window, Qt.Key.Key_F1)
+        QTest.qWait(30)
+        assert evaluate("workspacePicker.visible && workspacePicker.commandsMode")
+        picker_query = window.findChild(QObject, "workspacePickerQuery")
+        picker_query.setProperty("text", "toggle word wrap")
+        assert evaluate("workspacePicker.results.length") == 1
+        old_wrap = prefs.wordWrap
+        QTest.keyClick(window, Qt.Key.Key_Return)
+        assert prefs.wordWrap != old_wrap
+        assert not evaluate("workspacePicker.visible")
+        # Palette toolbar uses the same action.
+        assert QMetaObject.invokeMethod(window.findChild(QObject, "commandPaletteButton"), "click")
+        assert evaluate("workspacePicker.commandsMode")
+        evaluate("workspacePicker.close()")
+
+        QTest.keyClick(window, Qt.Key.Key_P, Qt.KeyboardModifier.ControlModifier)
+        wait_for_workspace()
+        assert evaluate("workspacePicker.visible && !workspacePicker.commandsMode")
+        picker_query.setProperty("text", "workspacematch")
+        assert evaluate("workspacePicker.results.length") == 1
+        QTest.keyClick(window, Qt.Key.Key_Return)
+        assert manager.currentDocument.filePath == str(workspace_file)
+        assert evaluate("currentPane.editor.text") == "\U0001f600 hello\n"
+
+        QTest.keyClick(window, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+        assert evaluate("workspaceSearchDialog.visible")
+        search_query = window.findChild(QObject, "workspaceSearchQuery")
+        search_query.setProperty("text", "hello")
+        window.findChild(QObject, "workspaceSearchMasks").setProperty("text", "*.py")
+        assert QMetaObject.invokeMethod(window.findChild(QObject, "workspaceSearchButton"), "click")
+        wait_for_workspace()
+        assert len(workspace_tools.matches) == 1
+        # Click the actual search-result delegate, then verify UTF-16 selection.
+        pending_items = [window.contentItem()]
+        result_item = None
+        while pending_items:
+            item = pending_items.pop()
+            if item.objectName() == "workspaceSearchMatch:0":
+                result_item = item
+                break
+            pending_items.extend(item.childItems())
+        assert result_item is not None
+        QTest.mouseClick(window, Qt.MouseButton.LeftButton, pos=result_item.mapToScene(
+            result_item.boundingRect().center()
+        ).toPoint())
+        assert evaluate("currentPane.editor.selectedText") == "hello"
+        assert not evaluate("workspaceSearchDialog.visible")
+        evaluate("currentPane.editor.text = 'changed'")
+        evaluate("workspaceSearchDialog.matchRequested(Workspace.matches[0])")
+        assert evaluate("messageDialog.visible")
+        assert "modified tab" in evaluate("messageDialog.message")
+        evaluate("messageDialog.close()")
+        manager.currentDocument.modified = False
+        evaluate("workspaceSearchDialog.matchRequested(Workspace.matches[0])")
+        assert "changed since the search" in evaluate("messageDialog.message")
+        evaluate("messageDialog.close()")
+
+        filter_field = window.findChild(QObject, "explorerFilterField")
+        filter_field.setProperty("text", "workspace-match")
+        QTest.qWait(180)
+        assert [node.name for node in project_explorer._items] == [project.name, workspace_file.name]
+        filter_field.setProperty("text", "")
+        QTest.qWait(30)
+        prefs.showHiddenFiles = True
+        prefs.workspaceIgnorePatterns = "*.py"
+        assert project_explorer.showHidden
+        assert project_explorer.ignorePatterns == "*.py"
+        assert workspace_tools.fileCount == 0
+        assert QMetaObject.invokeMethod(window.findChild(QObject, "quickOpenButton"), "click")
+        wait_for_workspace()
+        assert all(not entry["path"].endswith(".py") for entry in workspace_tools.quickFiles(""))
+        evaluate("workspacePicker.close()")
         assert not warnings
     finally:
+        workspace_tools.shutdown()
         window.setProperty("visible", False)
         del engine
 

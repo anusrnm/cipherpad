@@ -21,6 +21,28 @@ Rectangle {
         folderDialog.open()
     }
 
+    function applyFilter() {
+        if (filenameFilter.text.trim())
+            Explorer.setFilterPaths(Workspace.filterPaths(filenameFilter.text))
+        else
+            Explorer.clearFilter()
+    }
+
+    Connections {
+        target: Workspace
+        function onEntriesChanged() { root.applyFilter() }
+    }
+    Connections {
+        target: Explorer
+        function onOptionsChanged() { filenameFilter.text = "" }
+        function onRootFoldersChanged() { filenameFilter.text = "" }
+    }
+    Timer {
+        id: filterDelay
+        interval: 150
+        onTriggered: root.applyFilter()
+    }
+
     FolderDialog {
         id: folderDialog
         title: "Select Folder to Add to Explorer"
@@ -215,6 +237,28 @@ Rectangle {
                 onClicked: Explorer.pasteItem(root.targetDirectory)
             }
             Item { Layout.fillWidth: true }
+        }
+
+        // ---------------------------------------------------- empty state
+        TextField {
+            id: filenameFilter
+            objectName: "explorerFilterField"
+            Layout.fillWidth: true
+            Layout.leftMargin: 6
+            Layout.rightMargin: 6
+            visible: Explorer.rootFolderCount > 0
+            color: Prefs.chromeText
+            placeholderText: Workspace.busy ? "Scanning..." : "Filter files (*.py or name)"
+            onTextChanged: {
+                if (!text.trim())
+                    Explorer.clearFilter()
+                else
+                    filterDelay.restart()
+            }
+            onActiveFocusChanged: if (activeFocus && !Workspace.busy) Workspace.scanFiles()
+            Keys.onEscapePressed: text = ""
+            ToolTip.visible: hovered
+            ToolTip.text: "Filters workspace paths, retaining matching ancestors. " + Workspace.status
         }
 
         // ---------------------------------------------------- empty state
