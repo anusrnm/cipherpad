@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import sys
 from pathlib import Path
 
@@ -79,10 +80,16 @@ def run(argv: list[str] | None = None) -> int:
     elif not folder_paths:
         manager.newDocument()
 
+    app.setQuitOnLastWindowClosed(True)
     exit_code = app.exec()
     prefs.saveSession(manager.openPaths())
     prefs.saveProjectFolders(project_explorer.openFolders())
     prefs.sync()
+
+    # Tear down QML before the application object so interpreter shutdown
+    # doesn't destroy them in arbitrary GC order (which can hang the process).
+    del engine
+    gc.collect()
     return exit_code
 
 

@@ -9,8 +9,6 @@ ApplicationWindow {
 
     width: Prefs.windowWidth
     height: Prefs.windowHeight
-    visibility: Prefs.windowMaximized ? Window.Maximized : Window.Windowed
-    visible: true
     color: Prefs.background
     font.pixelSize: Prefs.fontSize
     title: (currentDoc
@@ -25,8 +23,18 @@ ApplicationWindow {
 
     onWidthChanged: if (visibility === Window.Windowed) Prefs.windowWidth = width
     onHeightChanged: if (visibility === Window.Windowed) Prefs.windowHeight = height
+    // Only record user-visible states; Hidden (on close) and Minimized must not
+    // overwrite the saved maximized flag.
     onVisibilityChanged: function (visibility) {
-        Prefs.windowMaximized = (visibility === Window.Maximized)
+        if (visibility === Window.Maximized || visibility === Window.Windowed)
+            Prefs.windowMaximized = (visibility === Window.Maximized)
+    }
+
+    Component.onCompleted: {
+        if (Prefs.windowMaximized)
+            showMaximized()
+        else
+            show()
     }
 
     onClosing: function (close) {
