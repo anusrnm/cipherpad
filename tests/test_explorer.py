@@ -137,6 +137,25 @@ def test_root_node_roles(explorer: ProjectExplorer, sample_tree: Path) -> None:
     assert explorer.data(idx, ProjectExplorer.DepthRole) == 0
 
 
+def test_tree_model_hierarchy(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    model = explorer.treeModel
+
+    root = model.index(0, 0)
+    assert model.data(root, ProjectExplorer.NameRole) == sample_tree.name
+    assert not model.parent(root).isValid()
+    assert model.rowCount(root) == 3
+
+    source = model.index(0, 0, root)
+    assert model.data(source, ProjectExplorer.NameRole) == "src"
+    assert model.parent(source) == root
+    assert model.rowCount(source) == 3
+
+    first_source_file = model.index(1, 0, source)
+    assert model.data(first_source_file, ProjectExplorer.NameRole) == "app.py"
+    assert model.parent(first_source_file) == source
+
+
 def test_children_sorted_directories_first(explorer: ProjectExplorer, sample_tree: Path) -> None:
     explorer.addFolder(str(sample_tree))
     # Direct children of sample_tree:

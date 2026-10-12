@@ -13,9 +13,40 @@ Rectangle {
     signal openFileRequested(string path)
     property string selectedPath: ""
     property bool selectedIsDir: false
+    property int currentExplorerRow: -1
     property var selectedFiles: []
     readonly property bool treeFocused: treeView.activeFocus
     signal compareFilesRequested(var paths)
+
+    function fileTypeIcon(fileType) {
+        const icons = {
+            python: "\ud83d\udc0d",
+            javascript: "JS",
+            typescript: "TS",
+            qml: "\ud83e\udde9",
+            c: "C",
+            cpp: "C++",
+            csharp: "C#",
+            java: "\u2615",
+            go: "\ud83d\udc39",
+            rust: "\ud83e\udd80",
+            json: "{}",
+            xml: "<>",
+            html: "\ud83c\udf10",
+            css: "\ud83c\udfa8",
+            markdown: "\ud83d\udcdd",
+            yaml: "\u2699\ufe0f",
+            toml: "\u2699\ufe0f",
+            ini: "\u2699\ufe0f",
+            shell: ">_",
+            powershell: ">_",
+            sql: "\ud83d\uddc4\ufe0f",
+            encrypted: "\ud83d\udd12",
+            text: "\ud83d\udcc4",
+            file: "\ud83d\udcc4"
+        }
+        return icons[fileType] || "\ud83d\udcc4"
+    }
 
     function selectPath(path, isDir, toggle) {
         selectedPath = path
@@ -26,7 +57,96 @@ Rectangle {
             selectedFiles = selectedFiles.includes(path) ? selectedFiles.filter(item => item !== path) : selectedFiles.concat([path])
         else
             selectedFiles = [path]
+        currentExplorerRow = -1
+        for (let i = 0; i < Explorer.count; ++i) {
+            const item = Explorer.itemAt(i)
+            if (item.path === path) {
+                currentExplorerRow = i
+                treeView.positionViewAtRow(i, TableView.Contain)
+                break
+            }
+        }
         treeView.forceActiveFocus()
+    }
+
+    function selectIndex(index) {
+        if (Explorer.count === 0)
+            return
+        const targetIndex = Math.max(0, Math.min(Explorer.count - 1, index))
+        const item = Explorer.itemAt(targetIndex)
+        if (item)
+            selectPath(item.path, item.isDir, false)
+    }
+
+    function moveSelection(delta) {
+        if (Explorer.count === 0)
+            return
+        selectIndex(currentExplorerRow < 0 || !selectedPath
+            ? (delta >= 0 ? 0 : Explorer.count - 1)
+            : currentExplorerRow + delta)
+    }
+
+    function activateSelection() {
+        const item = Explorer.itemAt(currentExplorerRow)
+        if (!item)
+            return
+        if (item.isDir)
+            toggleTreeExpansion(currentExplorerRow)
+        else
+            root.openFileRequested(item.path)
+    }
+
+    function expandSelection() {
+        const row = currentExplorerRow
+        const item = Explorer.itemAt(row)
+        if (!item || !item.isDir)
+            return
+        if (!treeView.isExpanded(row)) {
+            treeView.expand(row)
+            return
+        }
+        const child = Explorer.itemAt(row + 1)
+        if (child && child.depth > item.depth)
+            selectPath(child.path, child.isDir, false)
+    }
+
+    function collapseSelection() {
+        const row = currentExplorerRow
+        const item = Explorer.itemAt(row)
+        if (!item)
+            return
+        if (item.isDir && treeView.isExpanded(row)) {
+            treeView.collapse(row)
+            return
+        }
+        const parentIndex = indexForPath(Explorer.parentDirectory(item.path))
+        if (parentIndex >= 0)
+            selectIndex(parentIndex)
+    }
+
+    function toggleTreeExpansion(row) {
+        if (treeView.isExpanded(row))
+            treeView.collapse(row)
+        else
+            treeView.expand(row)
+    }
+
+    function syncTreeExpansion() {
+        let row = 0
+        while (row < Explorer.count) {
+            const item = Explorer.itemAt(row)
+            if (item.isDir && item.expanded && item.hasChildren && !treeView.isExpanded(row))
+                treeView.expand(row)
+            ++row
+        }
+    }
+
+    function indexForPath(path) {
+        for (let i = 0; i < Explorer.count; ++i) {
+            if (Explorer.itemAt(i).path === path)
+                return i
+        }
+        return -1
     }
     function compareSelected() {
         compareFilesRequested(selectedFiles)
@@ -53,8 +173,15 @@ Rectangle {
     Connections {
         target: Explorer
         function onOptionsChanged() { filenameFilter.text = "" }
-        function onRootFoldersChanged() { filenameFilter.text = ""; root.selectedFiles = [] }
+        function onRootFoldersChanged() {
+            filenameFilter.text = ""
+            root.selectedFiles = []
+            root.selectedPath = ""
+            root.selectedIsDir = false
+            root.currentExplorerRow = -1
+        }
         function onCountChanged() {
+            Qt.callLater(root.syncTreeExpansion)
             const visibleFiles = []
             for (let i = 0; i < Explorer.count; ++i) {
                 const item = Explorer.itemAt(i)
@@ -62,7 +189,19 @@ Rectangle {
                     visibleFiles.push(item.path)
             }
             root.selectedFiles = root.selectedFiles.filter(path => visibleFiles.includes(path))
+            const selectedRow = root.indexForPath(root.selectedPath)
+            if (selectedRow >= 0)
+                root.currentExplorerRow = selectedRow
+            else if (root.selectedPath) {
+                root.selectedPath = ""
+                root.selectedIsDir = false
+                root.currentExplorerRow = -1
+            }
         }
+    }
+    Connections {
+        target: Explorer.treeModel
+        function onModelReset() { Qt.callLater(root.syncTreeExpansion) }
     }
     Timer {
         id: filterDelay
@@ -325,14 +464,61 @@ Rectangle {
         }
 
         // ------------------------------------------------------- file tree
-        ListView {
+        TreeView {
             id: treeView
+            objectName: "projectExplorerTree"
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: Explorer.rootFolderCount > 0
+            activeFocusOnTab: true
             clip: true
             boundsBehavior: Flickable.StopAtBounds
-            model: Explorer
+            model: Explorer.treeModel
+            rowSpacing: 0
+            columnSpacing: 0
+
+            Component.onCompleted: Qt.callLater(root.syncTreeExpansion)
+            onExpanded: function(row) {
+                const item = Explorer.itemAt(row)
+                if (item)
+                    Explorer.expand(item.path)
+            }
+            onCollapsed: function(row) {
+                const item = Explorer.itemAt(row)
+                if (item)
+                    Explorer.collapse(item.path)
+            }
+
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+                switch (event.key) {
+                case Qt.Key_Up:
+                    root.moveSelection(-1)
+                    break
+                case Qt.Key_Down:
+                    root.moveSelection(1)
+                    break
+                case Qt.Key_Home:
+                    root.selectIndex(0)
+                    break
+                case Qt.Key_End:
+                    root.selectIndex(Explorer.count - 1)
+                    break
+                case Qt.Key_Left:
+                    root.collapseSelection()
+                    break
+                case Qt.Key_Right:
+                    root.expandSelection()
+                    break
+                case Qt.Key_Return:
+                case Qt.Key_Enter:
+                    root.activateSelection()
+                    break
+                default:
+                    return
+                }
+                event.accepted = true
+            }
 
             HoverHandler {
                 id: treeHover
@@ -346,9 +532,10 @@ Rectangle {
                 id: delegateItem
                 objectName: "explorerItem:" + path
                 width: treeView.width
+                implicitWidth: treeView.width
                 implicitHeight: 24
 
-                required property int index
+                required property int row
                 required property string name
                 required property string path
                 required property bool isDir
@@ -363,7 +550,7 @@ Rectangle {
                                                       && window.currentDoc.filePath === path
                 readonly property bool rowHovered: rowHover.hovered
 
-                color: root.selectedFiles.includes(path) ? Prefs.selection : rowHovered ? (isCurrentFile ? Prefs.selection : Prefs.border)
+                color: root.selectedFiles.includes(path) || root.currentExplorerRow === row ? Prefs.selection : rowHovered ? (isCurrentFile ? Prefs.selection : Prefs.border)
                        : isCurrentFile ? Prefs.selection
                        : "transparent"
                 opacity: isCurrentFile && !rowHovered ? 0.45 : (rowHovered ? 0.7 : 1.0)
@@ -388,7 +575,7 @@ Rectangle {
                             treeView.forceActiveFocus()
                         if (mouse.button === Qt.LeftButton) {
                             if (delegateItem.isDir) {
-                                Explorer.toggleExpanded(delegateItem.path)
+                                root.toggleTreeExpansion(delegateItem.row)
                             } else if (!toggle) {
                                 root.openFileRequested(delegateItem.path)
                             }
@@ -410,7 +597,7 @@ Rectangle {
                         implicitHeight: 16
 
                         Text {
-                            visible: delegateItem.isDir
+                            visible: delegateItem.hasChildren
                             anchors.centerIn: parent
                             text: delegateItem.expanded ? "\u25be" : "\u25b8"
                             color: Prefs.chromeText
@@ -424,12 +611,12 @@ Rectangle {
                         text: {
                             if (delegateItem.isRoot) return "\ud83d\udcc1"
                             if (delegateItem.isDir) return delegateItem.expanded ? "\ud83d\udcc2" : "\ud83d\udcc1"
-                            if (delegateItem.fileType === "encrypted") return "\ud83d\udd12"
-                            if (delegateItem.fileType === "python") return "\ud83d\udc0d"
-                            return "\ud83d\udcc4"
+                            return root.fileTypeIcon(delegateItem.fileType)
                         }
                         font.pixelSize: 12
+                        Layout.preferredWidth: 24
                         Layout.alignment: Qt.AlignVCenter
+                        horizontalAlignment: Text.AlignHCenter
                     }
 
                     // Item Name

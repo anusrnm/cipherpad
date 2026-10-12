@@ -260,6 +260,41 @@ def _check_safety_ui(directory: str) -> None:
         return None
 
     try:
+        explorer_root = Path(directory) / "keyboard-project"
+        source_dir = explorer_root / "src"
+        source_dir.mkdir(parents=True)
+        source_file = source_dir / "sample.py"
+        source_file.write_text("print('keyboard')", encoding="utf-8")
+        final_file = explorer_root / "notes.txt"
+        final_file.write_text("opened with Enter", encoding="utf-8")
+        assert project.addFolder(str(explorer_root))
+        qt_app.processEvents()
+        tree = visual_child(window.contentItem(), "projectExplorerTree")
+        assert tree is not None
+        tree.forceActiveFocus()
+        QTest.keyClick(window, Qt.Key.Key_Down)
+        assert evaluate("explorerSidebar.selectedPath") == str(explorer_root)
+        QTest.keyClick(window, Qt.Key.Key_Down)
+        assert evaluate("explorerSidebar.selectedPath") == str(source_dir)
+        QTest.keyClick(window, Qt.Key.Key_Right)
+        assert project.count == 4
+        QTest.keyClick(window, Qt.Key.Key_Right)
+        assert evaluate("explorerSidebar.selectedPath") == str(source_file)
+        QTest.keyClick(window, Qt.Key.Key_Left)
+        assert evaluate("explorerSidebar.selectedPath") == str(source_dir)
+        QTest.keyClick(window, Qt.Key.Key_Left)
+        assert project.count == 3
+        QTest.keyClick(window, Qt.Key.Key_Right)
+        assert project.count == 4
+        QTest.keyClick(window, Qt.Key.Key_Left)
+        assert project.count == 3
+        QTest.keyClick(window, Qt.Key.Key_End)
+        assert evaluate("explorerSidebar.selectedPath") == str(final_file)
+        QTest.keyClick(window, Qt.Key.Key_Return)
+        assert manager.currentDocument.filePath == str(final_file)
+        manager.closeDocument(manager.currentIndex)
+        project.clearFolders()
+
         manager.newDocument()
         qt_app.processEvents()
         evaluate('currentPane.editor.text = "ordinary edits"; captureRecovery()')

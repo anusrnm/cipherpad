@@ -1212,7 +1212,13 @@ ApplicationWindow {
             BarButton { text: "\ud83d\udd0e"; objectName: "workspaceSearchToolbarButton"; action: workspaceSearchAction; tip: "Search Workspace (Ctrl+Shift+F)" }
             BarButton { objectName: "commandPaletteButton"; action: commandPaletteAction; text: "\ud83d\uddf3"; tip: "Command Pallete (F1)" }
             BarButton { objectName: "splitEditorsButton"; text: "||"; tip: "Toggle Split Editors (Ctrl+Alt+S)"; onClicked: window.toggleSplit() }
-            BarButton { objectName: "lockTabButton"; action: lockTabAction; text: window.currentDoc && window.currentDoc.locked ? "Unlock" : "Lock"; tip: "Lock / Unlock Encrypted Tab (Ctrl+Alt+L)" }
+            BarButton {
+                objectName: "lockTabButton"
+                action: lockTabAction
+                text: window.currentDoc && window.currentDoc.locked ? "\ud83d\udd13" : "\ud83d\udd12"
+                tip: "Lock / Unlock Encrypted Tab (Ctrl+Alt+L)"
+                Accessible.name: window.currentDoc && window.currentDoc.locked ? "Unlock Encrypted Tab" : "Lock Encrypted Tab"
+            }
             BarButton {
                 objectName: "prettyPrintButton"
                 action: prettyPrintAction
@@ -1222,9 +1228,10 @@ ApplicationWindow {
             }
             ToolSeparator {}
             BarButton {
-                text: "\ud83d\udd12"
+                text: "\ud83d\udd10"
                 tip: window.currentDoc && window.currentDoc.encrypted
                      ? "File is encrypted" : "Encrypt file (Ctrl+Shift+E)"
+                Accessible.name: "Encrypt File"
                 enabled: window.currentDoc !== null && !window.currentDoc.encrypted
                 onClicked: window.startEncrypt()
             }

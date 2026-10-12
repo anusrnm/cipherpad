@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import (
     Property,
+    QAbstractItemModel,
     QAbstractListModel,
     QByteArray,
     QFileSystemWatcher,
@@ -158,6 +159,18 @@ class ExplorerNode:
     root_path: str
 
 
+@dataclass
+class ExplorerTreeNode:
+    path: str
+    name: str
+    is_dir: bool
+    is_root: bool
+    file_type: str
+    root_path: str
+    parent: ExplorerTreeNode | None = None
+    children: list[ExplorerTreeNode] | None = None
+
+
 @QmlElement
 class ProjectExplorer(QAbstractListModel):
     """List model representing the visible nodes in a multi-folder project tree."""
@@ -191,6 +204,7 @@ class ProjectExplorer(QAbstractListModel):
         self._show_hidden = False
         self._ignore_patterns = ";".join(sorted(IGNORED_NAMES))
         self._filter_paths: set[str] | None = None
+        self._tree_model = ProjectExplorerTreeModel(self)
 
     def bind_documents(self, documents: DocumentManager) -> None:
         self._documents = documents
@@ -198,6 +212,10 @@ class ProjectExplorer(QAbstractListModel):
     @Property(bool, notify=optionsChanged)
     def showHidden(self) -> bool:
         return self._show_hidden
+
+    @Property(QObject, constant=True)
+    def treeModel(self) -> QObject:
+        return self._tree_model
 
     @Property(str, notify=optionsChanged)
     def ignorePatterns(self) -> str:
@@ -923,3 +941,141 @@ class ProjectExplorer(QAbstractListModel):
 
     def _on_directory_changed(self, _path: str) -> None:
         self._rebuild_tree()
+
+
+class ProjectExplorerTreeModel(QAbstractItemModel):
+    """Hierarchical model adapter used by Qt Quick TreeView."""
+
+    def __init__(self, explorer: ProjectExplorer) -> None:
+        super().__init__(explorer)
+        self._explorer = explorer
+        self._roots: list[ExplorerTreeNode] = []
+        explorer.modelReset.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self) -> None:
+        self.beginResetModel()
+        self._roots = [
+            ExplorerTreeNode(
+                path=root,
+                name=os.path.basename(root) or root,
+                is_dir=True,
+                is_root=True,
+                file_type="folder",
+                root_path=root,
+            )
+            for root in self._explorer._root_folders
+            if os.path.isdir(root)
+        ]
+        self.endResetModel()
+
+    def _children(self, parent: ExplorerTreeNode | None) -> list[ExplorerTreeNode]:
+        if parent is None:
+            return self._roots
+        if not parent.is_dir:
+            return []
+        if parent.children is None:
+            entries: list[os.DirEntry] = []
+            try:
+                with os.scandir(parent.path) as scan:
+                    for entry in scan:
+                        relative = os.path.relpath(entry.path, parent.root_path)
+                        if is_ignored_path(
+                            relative,
+                            self._explorer._show_hidden,
+                            self._explorer._ignore_patterns,
+                        ):
+                            continue
+                        path = os.path.normpath(entry.path)
+                        if (
+                            self._explorer._filter_paths is not None
+                            and path not in self._explorer._filter_paths
+                        ):
+                            continue
+                        entries.append(entry)
+            except OSError:
+                parent.children = []
+                return parent.children
+
+            entries.sort(key=lambda entry: (
+                not entry.is_dir(follow_symlinks=False),
+                entry.name.lower(),
+            ))
+            parent.children = [
+                ExplorerTreeNode(
+                    path=os.path.normpath(entry.path),
+                    name=entry.name,
+                    is_dir=entry.is_dir(follow_symlinks=False),
+                    is_root=False,
+                    file_type=get_file_type(
+                        entry.name,
+                        entry.is_dir(follow_symlinks=False),
+                    ),
+                    root_path=parent.root_path,
+                    parent=parent,
+                )
+                for entry in entries
+            ]
+        return parent.children
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
+        if parent.isValid() and parent.column() != 0:
+            return 0
+        node = parent.internalPointer() if parent.isValid() else None
+        return len(self._children(node))
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
+        return 1
+
+    def index(
+        self,
+        row: int,
+        column: int,
+        parent: QModelIndex = QModelIndex(),
+    ) -> QModelIndex:
+        if column != 0 or row < 0 or row >= self.rowCount(parent):
+            return QModelIndex()
+        parent_node = parent.internalPointer() if parent.isValid() else None
+        return self.createIndex(row, column, self._children(parent_node)[row])
+
+    def parent(self, index: QModelIndex) -> QModelIndex:
+        if not index.isValid():
+            return QModelIndex()
+        node: ExplorerTreeNode = index.internalPointer()
+        parent_node = node.parent
+        if parent_node is None:
+            return QModelIndex()
+        siblings = self._roots if parent_node.parent is None else self._children(parent_node.parent)
+        return self.createIndex(siblings.index(parent_node), 0, parent_node)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        node: ExplorerTreeNode = index.internalPointer()
+        match role:
+            case Qt.ItemDataRole.DisplayRole | ProjectExplorer.NameRole:
+                return node.name
+            case ProjectExplorer.PathRole:
+                return node.path
+            case ProjectExplorer.IsDirRole:
+                return node.is_dir
+            case ProjectExplorer.IsRootRole:
+                return node.is_root
+            case ProjectExplorer.FileTypeRole:
+                return node.file_type
+            case ProjectExplorer.RootPathRole:
+                return node.root_path
+        return None
+
+    def hasChildren(self, parent: QModelIndex = QModelIndex()) -> bool:  # noqa: N802
+        return bool(self.rowCount(parent))
+
+    def roleNames(self) -> dict:  # noqa: N802
+        return {
+            ProjectExplorer.NameRole: QByteArray(b"name"),
+            ProjectExplorer.PathRole: QByteArray(b"path"),
+            ProjectExplorer.IsDirRole: QByteArray(b"isDir"),
+            ProjectExplorer.IsRootRole: QByteArray(b"isRoot"),
+            ProjectExplorer.FileTypeRole: QByteArray(b"fileType"),
+            ProjectExplorer.RootPathRole: QByteArray(b"rootPath"),
+        }
