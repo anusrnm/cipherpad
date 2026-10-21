@@ -14,7 +14,14 @@ Rectangle {
     property string selectedPath: ""
     property bool selectedIsDir: false
     property int currentExplorerRow: -1
-    property var selectedFiles: []
+    property var selectedPaths: []
+    readonly property var selectedFiles: selectedPaths.filter(path => {
+        const row = indexForPath(path)
+        return row >= 0 && !Explorer.itemAt(row).isDir
+    })
+    property string selectionAnchor: ""
+    readonly property bool canModifySelection: selectedPaths.length > 0
+        && !selectedPaths.some(path => Explorer.rootFolders.includes(path))
     readonly property bool treeFocused: treeView.activeFocus
     signal compareFilesRequested(var paths)
 
@@ -48,15 +55,25 @@ Rectangle {
         return icons[fileType] || "\ud83d\udcc4"
     }
 
-    function selectPath(path, isDir, toggle) {
+    function selectPath(path, isDir, toggle, range) {
         selectedPath = path
         selectedIsDir = isDir
-        if (isDir)
-            selectedFiles = []
-        else if (toggle)
-            selectedFiles = selectedFiles.includes(path) ? selectedFiles.filter(item => item !== path) : selectedFiles.concat([path])
-        else
-            selectedFiles = [path]
+        if (range && indexForPath(selectionAnchor) >= 0) {
+            const from = indexForPath(selectionAnchor)
+            const to = indexForPath(path)
+            let paths = toggle ? selectedPaths.slice() : []
+            for (let row = Math.min(from, to); row <= Math.max(from, to); ++row) {
+                const candidate = Explorer.itemAt(row).path
+                if (!paths.includes(candidate))
+                    paths.push(candidate)
+            }
+            selectedPaths = paths
+        } else {
+            selectedPaths = toggle
+                ? (selectedPaths.includes(path) ? selectedPaths.filter(item => item !== path) : selectedPaths.concat([path]))
+                : [path]
+            selectionAnchor = path
+        }
         currentExplorerRow = -1
         for (let i = 0; i < Explorer.count; ++i) {
             const item = Explorer.itemAt(i)
@@ -69,21 +86,21 @@ Rectangle {
         treeView.forceActiveFocus()
     }
 
-    function selectIndex(index) {
+    function selectIndex(index, range) {
         if (Explorer.count === 0)
             return
         const targetIndex = Math.max(0, Math.min(Explorer.count - 1, index))
         const item = Explorer.itemAt(targetIndex)
         if (item)
-            selectPath(item.path, item.isDir, false)
+            selectPath(item.path, item.isDir, false, range)
     }
 
-    function moveSelection(delta) {
+    function moveSelection(delta, range) {
         if (Explorer.count === 0)
             return
         selectIndex(currentExplorerRow < 0 || !selectedPath
             ? (delta >= 0 ? 0 : Explorer.count - 1)
-            : currentExplorerRow + delta)
+            : currentExplorerRow + delta, range)
     }
 
     function activateSelection() {
@@ -149,7 +166,7 @@ Rectangle {
         return -1
     }
     function compareSelected() {
-        compareFilesRequested(selectedFiles)
+        compareFilesRequested(selectedPaths.length === 2 ? selectedFiles : [])
     }
     readonly property string targetDirectory: selectedPath
         ? (selectedIsDir ? selectedPath : Explorer.parentDirectory(selectedPath))
@@ -175,20 +192,20 @@ Rectangle {
         function onOptionsChanged() { filenameFilter.text = "" }
         function onRootFoldersChanged() {
             filenameFilter.text = ""
-            root.selectedFiles = []
+            root.selectedPaths = []
+            root.selectionAnchor = ""
             root.selectedPath = ""
             root.selectedIsDir = false
             root.currentExplorerRow = -1
         }
         function onCountChanged() {
             Qt.callLater(root.syncTreeExpansion)
-            const visibleFiles = []
+            const visiblePaths = []
             for (let i = 0; i < Explorer.count; ++i) {
                 const item = Explorer.itemAt(i)
-                if (!item.isDir)
-                    visibleFiles.push(item.path)
+                visiblePaths.push(item.path)
             }
-            root.selectedFiles = root.selectedFiles.filter(path => visibleFiles.includes(path))
+            root.selectedPaths = root.selectedPaths.filter(path => visiblePaths.includes(path))
             const selectedRow = root.indexForPath(root.selectedPath)
             if (selectedRow >= 0)
                 root.currentExplorerRow = selectedRow
@@ -207,6 +224,18 @@ Rectangle {
         id: filterDelay
         interval: 150
         onTriggered: root.applyFilter()
+    }
+
+    FolderDialog {
+        id: moveDialog
+        title: "Move Selected Items to Folder"
+        property var sourcePaths: []
+        onAccepted: Explorer.transferItems(sourcePaths, String(selectedFolder), true)
+    }
+
+    function moveSelected() {
+        moveDialog.sourcePaths = selectedPaths.slice()
+        moveDialog.open()
     }
 
     FolderDialog {
@@ -266,9 +295,10 @@ Rectangle {
         onAccepted: {
             const name = nameField.text.trim()
             if (itemType === "rename") {
+                const wasDir = root.selectedIsDir
                 const renamed = Explorer.rename(sourcePath, name)
-                if (renamed && root.selectedPath === sourcePath)
-                    root.selectedPath = renamed
+                if (renamed)
+                    root.selectPath(renamed, wasDir, false)
             } else if (itemType === "file") {
                 const created = Explorer.createFile(parentDir, name)
                 if (created) {
@@ -283,28 +313,29 @@ Rectangle {
     AppDialog {
         id: deleteDialog
         objectName: "explorerDeleteDialog"
-        heading: "Delete Item"
+        heading: targetPaths.length > 1 ? "Delete Selected Items" : "Delete Item"
         standardButtons: Dialog.Yes | Dialog.Cancel
         width: 420
         property string targetPath: ""
         property string targetName: ""
+        property var targetPaths: []
         function prompt(path, name) {
             targetPath = path
             targetName = name
+            targetPaths = root.selectedPaths.slice()
             open()
         }
         Label {
             width: parent.width
-            text: "Move \"" + deleteDialog.targetName
-                  + "\" to Trash/Recycle Bin? All contents of a folder are included."
+            text: (deleteDialog.targetPaths.length > 1
+                  ? "Move " + deleteDialog.targetPaths.length + " selected items"
+                  : "Move \"" + deleteDialog.targetName + "\"")
+                  + " to Trash/Recycle Bin? All contents of selected folders are included."
             color: Prefs.chromeText
             wrapMode: Text.Wrap
         }
         onAccepted: {
-            if (Explorer.deleteItem(targetPath)) {
-                root.selectedPath = ""
-                root.selectedIsDir = false
-            }
+            Explorer.deleteItems(targetPaths)
         }
     }
 
@@ -332,7 +363,7 @@ Rectangle {
                 spacing: 2
 
                 Label {
-                    text: "EXPLORER"
+                    text: "EXPLORER" + (root.selectedPaths.length > 1 ? " (" + root.selectedPaths.length + ")" : "")
                     color: Prefs.chromeText
                     opacity: 0.75
                     font.bold: true
@@ -400,7 +431,7 @@ Rectangle {
                 tip: "Paste Copied/Cut Explorer Item"
                 enabled: Explorer.canPaste && root.targetDirectory !== ""
                 implicitWidth: 48
-                onClicked: Explorer.pasteItem(root.targetDirectory)
+                onClicked: Explorer.pasteItems(root.targetDirectory)
             }
             Item { Layout.fillWidth: true }
         }
@@ -491,18 +522,45 @@ Rectangle {
 
             Keys.priority: Keys.BeforeItem
             Keys.onPressed: function(event) {
+                const ctrl = (event.modifiers & Qt.ControlModifier) !== 0
+                const range = (event.modifiers & Qt.ShiftModifier) !== 0
+                if (ctrl) {
+                    if (event.key === Qt.Key_A) {
+                        const paths = []
+                        for (let i = 0; i < Explorer.count; ++i) {
+                            const item = Explorer.itemAt(i)
+                            if (!item.isRoot)
+                                paths.push(item.path)
+                        }
+                        root.selectedPaths = paths
+                    } else if (event.key === Qt.Key_C || event.key === Qt.Key_X) {
+                        Explorer.copyItems(root.selectedPaths, event.key === Qt.Key_X)
+                    } else if (event.key === Qt.Key_V) {
+                        Explorer.pasteItems(root.targetDirectory)
+                    } else
+                        return
+                    event.accepted = true
+                    return
+                }
                 switch (event.key) {
                 case Qt.Key_Up:
-                    root.moveSelection(-1)
+                    root.moveSelection(-1, range)
                     break
                 case Qt.Key_Down:
-                    root.moveSelection(1)
+                    root.moveSelection(1, range)
                     break
                 case Qt.Key_Home:
-                    root.selectIndex(0)
+                    root.selectIndex(0, range)
                     break
                 case Qt.Key_End:
-                    root.selectIndex(Explorer.count - 1)
+                    root.selectIndex(Explorer.count - 1, range)
+                    break
+                case Qt.Key_Delete:
+                    if (root.canModifySelection)
+                        deleteDialog.prompt(root.selectedPath, Explorer.itemAt(root.currentExplorerRow).name || "")
+                    break
+                case Qt.Key_Escape:
+                    root.selectedPaths = []
                     break
                 case Qt.Key_Left:
                     root.collapseSelection()
@@ -550,7 +608,7 @@ Rectangle {
                                                       && window.currentDoc.filePath === path
                 readonly property bool rowHovered: rowHover.hovered
 
-                color: root.selectedFiles.includes(path) || root.currentExplorerRow === row ? Prefs.selection : rowHovered ? (isCurrentFile ? Prefs.selection : Prefs.border)
+                color: root.selectedPaths.includes(path) ? Prefs.selection : rowHovered ? (isCurrentFile ? Prefs.selection : Prefs.border)
                        : isCurrentFile ? Prefs.selection
                        : "transparent"
                 opacity: isCurrentFile && !rowHovered ? 0.45 : (rowHovered ? 0.7 : 1.0)
@@ -569,14 +627,19 @@ Rectangle {
 
                     onClicked: function (mouse) {
                         const toggle = (mouse.modifiers & Qt.ControlModifier) !== 0
-                        if (mouse.button !== Qt.RightButton || !root.selectedFiles.includes(delegateItem.path))
-                            root.selectPath(delegateItem.path, delegateItem.isDir, toggle)
-                        else
+                        const range = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                        if (mouse.button !== Qt.RightButton || !root.selectedPaths.includes(delegateItem.path))
+                            root.selectPath(delegateItem.path, delegateItem.isDir, toggle, range)
+                        else {
+                            root.selectedPath = delegateItem.path
+                            root.selectedIsDir = delegateItem.isDir
+                            root.currentExplorerRow = delegateItem.row
                             treeView.forceActiveFocus()
+                        }
                         if (mouse.button === Qt.LeftButton) {
-                            if (delegateItem.isDir) {
+                            if (delegateItem.isDir && !toggle && !range) {
                                 root.toggleTreeExpansion(delegateItem.row)
-                            } else if (!toggle) {
+                            } else if (!delegateItem.isDir && !toggle && !range) {
                                 root.openFileRequested(delegateItem.path)
                             }
                         } else if (mouse.button === Qt.RightButton) {
@@ -651,7 +714,7 @@ Rectangle {
                         objectName: "explorerCompareItem"
                         text: "Compare Selected Files"
                         shortcutText: "Ctrl+D"
-                        enabled: root.selectedFiles.length === 2
+                        enabled: root.selectedPaths.length === 2 && root.selectedFiles.length === 2
                         onTriggered: root.compareSelected()
                     }
                     AppMenuItem {
@@ -675,35 +738,42 @@ Rectangle {
                     AppMenuItem {
                         objectName: "explorerRenameItem"
                         text: "Rename\u2026"
+                        enabled: root.selectedPaths.length === 1
                         onTriggered: nameDialog.promptRename(delegateItem.path, delegateItem.name)
                     }
                     AppMenuItem {
                         objectName: "explorerDuplicateItem"
                         text: "Duplicate"
-                        enabled: !delegateItem.isRoot
+                        enabled: !delegateItem.isRoot && root.selectedPaths.length === 1
                         onTriggered: Explorer.duplicateItem(delegateItem.path)
                     }
                     AppMenuItem {
                         objectName: "explorerCutItem"
                         text: "Cut"
-                        enabled: !delegateItem.isRoot
-                        onTriggered: Explorer.copyItem(delegateItem.path, true)
+                        enabled: root.canModifySelection
+                        onTriggered: Explorer.copyItems(root.selectedPaths, true)
                     }
                     AppMenuItem {
                         objectName: "explorerCopyItem"
                         text: "Copy"
-                        onTriggered: Explorer.copyItem(delegateItem.path, false)
+                        onTriggered: Explorer.copyItems(root.selectedPaths, false)
                     }
                     AppMenuItem {
                         objectName: "explorerPasteItem"
                         text: "Paste"
                         enabled: Explorer.canPaste
-                        onTriggered: Explorer.pasteItem(root.targetDirectory)
+                        onTriggered: Explorer.pasteItems(root.targetDirectory)
+                    }
+                    AppMenuItem {
+                        objectName: "explorerMoveItems"
+                        text: "Move Selected Items To\u2026"
+                        enabled: root.canModifySelection
+                        onTriggered: root.moveSelected()
                     }
                     AppMenuItem {
                         objectName: "explorerDeleteItem"
                         text: "Delete\u2026"
-                        enabled: !delegateItem.isRoot
+                        enabled: root.canModifySelection
                         onTriggered: deleteDialog.prompt(delegateItem.path, delegateItem.name)
                     }
                     MenuSeparator {}

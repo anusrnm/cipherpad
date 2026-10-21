@@ -175,13 +175,18 @@ def _check_pretty_print_qml(settings_directory: str) -> None:
         return value[0]
 
     def find_row(path: Path):
-        pending = [window.contentItem()]
-        while pending:
-            item = pending.pop()
-            if item.objectName() == "explorerItem:" + str(path):
-                return item
-            pending.extend(item.childItems())
+        for _ in range(100):
+            pending = [window.contentItem()]
+            while pending:
+                item = pending.pop()
+                if item.objectName() == "explorerItem:" + str(path):
+                    return item
+                pending.extend(item.childItems())
+            QTest.qWait(10)
         raise AssertionError(f"Explorer row not found: {path}")
+
+    def select_path(path: Path):
+        evaluate(f"explorerSidebar.selectPath({str(path)!r}, {str(path.is_dir()).lower()}, false)")
 
     try:
         manager.newDocument()
@@ -279,6 +284,7 @@ def _check_pretty_print_qml(settings_directory: str) -> None:
         project_explorer.refresh()
         qt_app.processEvents()
         copied = project / "renamed copy.txt"
+        select_path(copied)
         row = find_row(copied)
         assert QMetaObject.invokeMethod(row.findChild(QObject, "explorerCopyItem"), "click")
         row = find_row(destination)
@@ -288,6 +294,7 @@ def _check_pretty_print_qml(settings_directory: str) -> None:
         assert QMetaObject.invokeMethod(row.findChild(QObject, "explorerPasteItem"), "click")
         qt_app.processEvents()
         assert (destination / copied.name).read_text() == "original"
+        select_path(copied)
         row = find_row(copied)
         assert QMetaObject.invokeMethod(row.findChild(QObject, "explorerCutItem"), "click")
         assert project_explorer.canPaste
@@ -312,6 +319,7 @@ def _check_pretty_print_qml(settings_directory: str) -> None:
         assert QMetaObject.invokeMethod(name_dialog, "accept")
         qt_app.processEvents()
         assert (project / "created.txt").exists()
+        select_path(renamed)
         row = find_row(renamed)
         assert QMetaObject.invokeMethod(row.findChild(QObject, "explorerDeleteItem"), "click")
         delete_dialog = window.findChild(QObject, "explorerDeleteDialog")

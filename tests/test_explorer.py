@@ -45,6 +45,127 @@ def test_starts_empty(explorer: ProjectExplorer) -> None:
     assert explorer.rootFolders == []
 
 
+def test_bulk_copy_cut_and_move(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    source = [str(sample_tree / "main.py"), str(sample_tree / "src")]
+    destination = sample_tree / "destination"
+    destination.mkdir()
+    assert explorer.copyItems(source, False)
+    copies = explorer.pasteItems(str(destination))
+    assert len(copies) == 2
+    assert (destination / "src" / "app.py").read_text() == "app = 1"
+    assert all(os.path.exists(path) for path in source)
+    other = sample_tree / "other"
+    other.mkdir()
+    assert explorer.copyItems(copies, True)
+    assert len(explorer.pasteItems(str(other))) == 2
+    assert not explorer.canPaste
+    assert not (destination / "src").exists()
+    assert (other / "src" / "app.py").exists()
+
+
+def test_bulk_preflight_and_nested_selection(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    destination = sample_tree / "destination"
+    destination.mkdir()
+    source = sample_tree / "src"
+    assert explorer.transferItems(
+        [str(source), str(source / "app.py"), str(source)], str(destination), False
+    ) == [str(destination / "src")]
+    errors = []
+    explorer.errorOccurred.connect(errors.append)
+    assert not explorer.transferItems(
+        [str(sample_tree / "main.py"), str(source)], str(destination), True
+    )
+    assert (sample_tree / "main.py").exists()
+    assert errors and "already exists" in errors[-1]
+    assert not explorer.transferItems([str(source)], str(source / "nested"), True)
+    assert not explorer.copyItems([str(sample_tree), str(source)], True)
+    assert not explorer.deleteItems([str(source), str(sample_tree)])
+    assert source.exists()
+
+
+def test_bulk_delete_deduplicates_descendants(explorer, sample_tree, monkeypatch):
+    explorer.addFolder(str(sample_tree))
+    deleted = []
+
+    def trash(path):
+        deleted.append(path)
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+        return True
+
+    monkeypatch.setattr(QFile, "moveToTrash", trash)
+    source = sample_tree / "src"
+    paths = [str(source / "app.py"), str(source), str(sample_tree / "main.py")]
+    assert explorer.copyItems(paths, False)
+    assert explorer.deleteItems(paths) == [str(source), str(sample_tree / "main.py")]
+    assert deleted == [str(source), str(sample_tree / "main.py")]
+    assert not explorer.canPaste
+
+
+def test_bulk_paste_keeps_failed_cut_items(explorer, sample_tree, monkeypatch):
+    explorer.addFolder(str(sample_tree))
+    destination = sample_tree / "destination"
+    destination.mkdir()
+    paths = [str(sample_tree / "main.py"), str(sample_tree / "README.md")]
+    transfer = explorer._transfer_item
+
+    def fail_second(source, target, move):
+        if source == paths[1]:
+            explorer.errorOccurred.emit("Simulated transfer failure")
+            return ""
+        return transfer(source, target, move)
+
+    monkeypatch.setattr(explorer, "_transfer_item", fail_second)
+    assert explorer.copyItems(paths, True)
+    assert explorer.pasteItems(str(destination)) == [str(destination / "main.py")]
+    assert explorer.canPaste
+    monkeypatch.setattr(explorer, "_transfer_item", transfer)
+    assert explorer.pasteItems(str(destination)) == [str(destination / "README.md")]
+    assert not explorer.canPaste
+
+
+def test_bulk_conflicting_names_and_missing_sources(explorer, sample_tree):
+    explorer.addFolder(str(sample_tree))
+    nested = sample_tree / "src" / "main.py"
+    nested.write_text("other")
+    destination = sample_tree / "destination"
+    destination.mkdir()
+    source = str(sample_tree / "main.py")
+    errors = []
+    explorer.errorOccurred.connect(errors.append)
+    assert not explorer.transferItems([source, str(nested)], str(destination), True)
+    assert "conflicting" in errors[-1]
+    assert not explorer.transferItems([source, str(sample_tree / "missing")], str(destination), True)
+    assert "not found" in errors[-1]
+    assert not list(destination.iterdir())
+    assert os.path.exists(source) and nested.exists()
+
+
+@pytest.mark.parametrize("protected", ["modified", "pinned"])
+def test_bulk_delete_preflights_all_open_documents(explorer, sample_tree, monkeypatch, protected):
+    from cipherpad.document import DocumentManager
+
+    manager = DocumentManager()
+    explorer.bind_documents(manager)
+    explorer.addFolder(str(sample_tree))
+    paths = [str(sample_tree / "main.py"), str(sample_tree / "src")]
+    manager.openFile(str(sample_tree / "src" / "app.py"))
+    setattr(manager.currentDocument, protected, True)
+    attempts = []
+    monkeypatch.setattr(QFile, "moveToTrash", lambda path: attempts.append(path) or True)
+    try:
+        assert not explorer.deleteItems(paths)
+        assert not attempts
+        assert all(os.path.exists(path) for path in paths)
+    finally:
+        manager.currentDocument.pinned = False
+        manager.closeAll()
+
+
 def test_add_folder(explorer: ProjectExplorer, sample_tree: Path) -> None:
     assert explorer.addFolder(str(sample_tree))
     assert explorer.rootFolderCount == 1

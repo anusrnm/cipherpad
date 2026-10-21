@@ -395,6 +395,102 @@ def _check_ui(directory):
             assert committed.stdout == first.read_bytes()
             assert evaluate("currentPane.editor.text") == before
         evaluate("gitPanel.close(); messageDialog.close()")
+
+        evaluate("currentDoc.language = 'javascript'; currentPane.editor.text = 'outer {\\n inner {\\n  value\\n }\\n}\\nafter'; currentPane.goToLine(1); currentDoc.modified = false")
+        application.processEvents()
+        full_text = evaluate("currentPane.editor.text")
+        full_height = evaluate("currentPane.editor.contentHeight")
+        QTest.keyClick(window, Qt.Key.Key_BracketLeft,
+                       Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+        application.processEvents()
+        assert evaluate("currentPane.editor.contentHeight") < full_height
+        assert evaluate("currentPane.editor.text") == full_text
+        assert not manager.currentDocument.modified
+        evaluate("currentPane.applyPalette()")
+        assert evaluate("currentPane.editor.contentHeight") < full_height
+        assert not manager.currentDocument.modified
+        evaluate("currentPane.goToLine(3)")
+        assert evaluate("currentPane.editor.contentHeight") == full_height
+        evaluate("currentPane.foldAll(true)")
+        assert not manager.currentDocument.modified
+        evaluate("currentPane.metrics.foldAll(false)")
+
+        source = root / "bulk-source"
+        bundle = source / "bundle"
+        bundle.mkdir(parents=True)
+        (bundle / "inside.txt").write_text("inside")
+        alpha = source / "a.txt"
+        beta = source / "b.txt"
+        alpha.write_text("alpha")
+        beta.write_text("beta")
+        copied = root / "bulk-copy"
+        moved = root / "bulk-move"
+        copied.mkdir()
+        moved.mkdir()
+        project.refresh()
+        project.expand(str(source))
+        application.processEvents()
+
+        def click_path(path, modifiers=Qt.KeyboardModifier.NoModifier, button=Qt.MouseButton.LeftButton):
+            QTest.qWait(50)
+            row = visual_child(window.contentItem(), "explorerRow:" + str(path))
+            assert row is not None
+            point = row.mapToScene(QPointF(row.width() / 2, row.height() / 2)).toPoint()
+            QTest.mouseClick(window, button, modifiers, point)
+            application.processEvents()
+
+        evaluate(f"explorerSidebar.selectPath({str(bundle)!r}, true, false)")
+        click_path(beta, Qt.KeyboardModifier.ShiftModifier)
+        assert evaluate("explorerSidebar.selectedPaths.length") == 3
+        assert evaluate("explorerSidebar.selectedFiles.length") == 2
+        evaluate(f"explorerSidebar.selectPath({str(alpha)!r}, false, false)")
+        click_path(bundle, Qt.KeyboardModifier.ControlModifier)
+        assert evaluate("explorerSidebar.selectedPaths.length") == 2
+        click_path(bundle, button=Qt.MouseButton.RightButton)
+        assert evaluate("explorerSidebar.selectedPaths.length") == 2
+        assert evaluate("explorerSidebar.targetDirectory") == str(bundle)
+        QTest.keyClick(window, Qt.Key.Key_Escape)
+        evaluate(f"explorerSidebar.selectPath({str(alpha)!r}, false, false); explorerSidebar.selectPath({str(bundle)!r}, true, true)")
+        QTest.keyClick(window, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        assert project.canPaste
+        evaluate(f"explorerSidebar.selectPath({str(copied)!r}, true, false)")
+        QTest.keyClick(window, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+        assert (copied / "a.txt").read_text() == "alpha"
+        assert (copied / "bundle" / "inside.txt").read_text() == "inside"
+        assert alpha.exists() and bundle.exists()
+        application.processEvents()
+        evaluate(f"explorerSidebar.selectPath({str(alpha)!r}, false, false); explorerSidebar.selectPath({str(bundle)!r}, true, true)")
+        QTest.keyClick(window, Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier)
+        evaluate(f"explorerSidebar.selectPath({str(moved)!r}, true, false)")
+        QTest.keyClick(window, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+        assert (moved / "a.txt").exists() and (moved / "bundle" / "inside.txt").exists()
+        assert not alpha.exists() and not bundle.exists()
+        project.expand(str(moved))
+        application.processEvents()
+        evaluate(f"explorerSidebar.selectPath({str(moved / 'a.txt')!r}, false, false); explorerSidebar.selectPath({str(moved / 'bundle')!r}, true, true)")
+        QTest.keyClick(window, Qt.Key.Key_Delete)
+        confirmation = window.findChild(QObject, "explorerDeleteDialog")
+        assert confirmation.property("visible")
+        assert len(confirmation.property("targetPaths").toVariant()) == 2
+        assert QMetaObject.invokeMethod(confirmation, "reject")
+        assert (moved / "a.txt").exists()
+        from PySide6.QtCore import QFile
+        original_trash = QFile.moveToTrash
+
+        def trash(path):
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            return True
+
+        try:
+            QFile.moveToTrash = trash
+            QTest.keyClick(window, Qt.Key.Key_Delete)
+            assert QMetaObject.invokeMethod(confirmation, "accept")
+            assert not (moved / "a.txt").exists() and not (moved / "bundle").exists()
+        finally:
+            QFile.moveToTrash = original_trash
         assert not warnings, warnings
     finally:
         window.findChild(QObject, "commandConsole").shutdown()

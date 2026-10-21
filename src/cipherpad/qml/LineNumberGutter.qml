@@ -13,12 +13,13 @@ Item {
 
     signal lineClicked(int line)
     signal bookmarkRequested(int line)
+    signal foldRequested(int line)
     property var bookmarks: metrics ? metrics.bookmarks : []
 
     property var rows: []
     readonly property int digits: Math.max(3, String(metrics ? metrics.lineCount : 1).length)
 
-    implicitWidth: digits * fontMetrics.advanceWidth("0") + 24
+    implicitWidth: digits * fontMetrics.advanceWidth("0") + 40
 
     function refresh() {
         if (!metrics || !flickable) {
@@ -67,13 +68,21 @@ Item {
 
                 Text {
                     anchors.right: parent.right
-                    anchors.rightMargin: 12
+                    anchors.rightMargin: 24
                     anchors.top: parent.top
                     text: lineItem.modelData.number
                     color: lineItem.isCurrent ? Prefs.gutterCurrent : Prefs.gutterText
                     font.family: Prefs.fontFamily
                     font.pixelSize: Prefs.fontSize
                     font.bold: lineItem.isCurrent
+                }
+                Text {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 4
+                    text: lineItem.modelData.collapsed ? "\u25b8" : "\u25be"
+                    visible: lineItem.modelData.foldable
+                    color: Prefs.gutterText
+                    font.pixelSize: Prefs.fontSize
                 }
                 Text {
                     anchors.left: parent.left
@@ -95,7 +104,9 @@ Item {
                 const row = root.rows[i]
                 const top = root.screenY(row)
                 if (mouse.y >= top && mouse.y <= top + row.height) {
-                    if (mouse.x < 16)
+                    if (mouse.x >= root.width - 22 && row.foldable)
+                        root.foldRequested(row.number)
+                    else if (mouse.x < 16)
                         root.bookmarkRequested(row.number)
                     else
                         root.lineClicked(row.number)

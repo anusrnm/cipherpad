@@ -13,6 +13,8 @@ from PySide6.QtGui import QTextCursor, QTextDocument
 from PySide6.QtQml import QmlElement
 from PySide6.QtQuick import QQuickTextDocument
 
+from .folding import fold_ranges
+
 QML_IMPORT_NAME = "Cipherpad"
 QML_IMPORT_MAJOR_VERSION = 1
 
@@ -30,6 +32,11 @@ class DocumentMetrics(QObject):
         self._quick_document: QQuickTextDocument | None = None
         self._document: QTextDocument | None = None
         self._bookmarks: list[QTextCursor] = []
+        self._language = "plain"
+        self._folds: dict[int, int] = {}
+        self._collapsed: set[int] = set()
+        self._fold_text: str | None = None
+        self._applying_folds = False
 
     def _get_document(self) -> QQuickTextDocument | None:
         return self._quick_document
@@ -43,6 +50,7 @@ class DocumentMetrics(QObject):
             except (RuntimeError, TypeError):
                 pass
             self._document.contentsChanged.disconnect(self.bookmarksChanged)
+            self._document.contentsChanged.disconnect(self._refresh_folds)
 
         self.clearBookmarks()
         self._quick_document = document
@@ -50,10 +58,93 @@ class DocumentMetrics(QObject):
         if self._document is not None:
             self._document.contentsChanged.connect(self.layoutChanged)
             self._document.contentsChanged.connect(self.bookmarksChanged)
+            self._document.contentsChanged.connect(self._refresh_folds)
+        self._fold_text = None
+        self._refresh_folds()
         self.documentChanged.emit()
         self.layoutChanged.emit()
 
     document = Property(QQuickTextDocument, _get_document, _set_document, notify=documentChanged)
+
+    @Property(str, notify=layoutChanged)
+    def language(self) -> str:
+        return self._language
+
+    @language.setter
+    def language(self, value: str) -> None:
+        if value != self._language:
+            self._language = value
+            self._fold_text = None
+            self._refresh_folds()
+
+    def _refresh_folds(self) -> None:
+        if self._document is None or self._applying_folds:
+            return
+        text = self._document.toPlainText()
+        if text == self._fold_text:
+            return
+        self._fold_text = text
+        had_collapsed = bool(self._collapsed)
+        self._collapsed.clear()
+        self._folds = fold_ranges(text, self._language)
+        if had_collapsed:
+            self._apply_folds()
+        else:
+            self.layoutChanged.emit()
+
+    def _apply_folds(self) -> None:
+        if self._document is None:
+            return
+        self._applying_folds = True
+        try:
+            hidden_until = 0
+            block = self._document.firstBlock()
+            while block.isValid():
+                number = block.blockNumber() + 1
+                block.setVisible(number > hidden_until)
+                if number in self._collapsed:
+                    hidden_until = max(hidden_until, self._folds[number])
+                block = block.next()
+            self._document.markContentsDirty(0, self._document.characterCount())
+            # Qt Quick refreshes its cached size and scene-graph text nodes on
+            # contentsChanged, not on the document layout's size notification.
+            self._document.contentsChanged.emit()
+        finally:
+            self._applying_folds = False
+        self.layoutChanged.emit()
+
+    @Property(bool, notify=layoutChanged)
+    def hasFolds(self) -> bool:
+        return bool(self._folds)
+
+    @Slot(int, result=bool)
+    def canFold(self, line: int) -> bool:
+        return line in self._folds
+
+    @Slot(int)
+    def toggleFold(self, line: int) -> None:
+        if line not in self._folds:
+            return
+        if line in self._collapsed:
+            self._collapsed.remove(line)
+        else:
+            self._collapsed.add(line)
+        self._apply_folds()
+
+    @Slot(bool)
+    def foldAll(self, collapse: bool) -> None:
+        self._collapsed = set(self._folds) if collapse else set()
+        self._apply_folds()
+
+    @Slot(int)
+    def revealPosition(self, position: int) -> None:
+        if self._document is None:
+            return
+        line = self._document.findBlock(position).blockNumber() + 1
+        enclosing = {start for start in self._collapsed if start < line <= self._folds[start]}
+        if enclosing:
+            self._collapsed.difference_update(enclosing)
+            self._apply_folds()
 
     @Property("QVariantList", notify=bookmarksChanged)
     def bookmarks(self) -> list[int]:
@@ -131,6 +222,8 @@ class DocumentMetrics(QObject):
                         "y": rect.y(),
                         "height": rect.height(),
                         "wrapped": block_layout.lineCount() > 1 if block_layout else False,
+                        "foldable": block.blockNumber() + 1 in self._folds,
+                        "collapsed": block.blockNumber() + 1 in self._collapsed,
                     }
                 )
             block = block.next()

@@ -69,6 +69,7 @@ Item {
     }
 
     function ensureCursorVisible() {
+        metrics.revealPosition(editor.cursorPosition)
         const rect = editor.cursorRectangle
         const top = flick.contentY
         const bottom = top + flick.height
@@ -80,6 +81,7 @@ Item {
     }
 
     function updateCursorInfo() {
+        metrics.revealPosition(editor.cursorPosition)
         cursorInfo = metrics.cursorInfo(editor.cursorPosition)
         bracketTimer.restart()
         pane.statusChanged()
@@ -96,6 +98,7 @@ Item {
     DocumentMetrics {
         id: metrics
         document: editor.textDocument
+        language: pane.doc ? pane.doc.language : "plain"
         onLayoutChanged: gutter.refresh()
     }
 
@@ -186,6 +189,11 @@ Item {
                 onBookmarkRequested: function(line) {
                     if (!pane.doc.locked)
                         metrics.toggleBookmark(line)
+                }
+                onFoldRequested: function(line) {
+                    editor.cursorPosition = metrics.positionForLine(line)
+                    metrics.toggleFold(line)
+                    pane.focusEditor()
                 }
             }
 
@@ -305,6 +313,15 @@ Item {
                             onTriggered: editor.paste() }
                         AppMenuItem { text: "Select All"; shortcutText: "Ctrl+A"; onTriggered: editor.selectAll() }
                         MenuSeparator {}
+                        AppMenuItem { text: "Toggle Fold"; shortcutText: "Ctrl+Shift+["
+                            enabled: metrics.hasFolds && metrics.canFold(pane.currentLine)
+                            onTriggered: pane.toggleCurrentFold() }
+                        AppMenuItem { text: "Fold All"
+                            enabled: metrics.hasFolds
+                            onTriggered: pane.foldAll(true) }
+                        AppMenuItem { text: "Unfold All"; enabled: metrics.hasFolds
+                            onTriggered: metrics.foldAll(false) }
+                        MenuSeparator {}
                         AppMenuItem {
                             objectName: "prettyPrintContextItem"
                             action: pane.prettyPrintAction
@@ -345,6 +362,18 @@ Item {
     property int pageCursorPosition: -1
     property int pageSelectionAnchor: 0
 
+    function toggleCurrentFold() {
+        metrics.toggleFold(pane.currentLine)
+    }
+
+    function foldAll(collapse) {
+        if (!metrics.hasFolds)
+            return
+        if (collapse)
+            editor.cursorPosition = 0
+        metrics.foldAll(collapse)
+    }
+
     function movePage(down, selecting) {
         const position = editor.cursorPosition
         const rect = editor.cursorRectangle
@@ -380,6 +409,13 @@ Item {
         }
         if (pane.doc && pane.doc.locked)
             return
+        if ((event.key === Qt.Key_BracketLeft || event.key === Qt.Key_BraceLeft)
+                && (event.modifiers & Qt.ControlModifier)
+                && (event.modifiers & Qt.ShiftModifier)) {
+            event.accepted = true
+            toggleCurrentFold()
+            return
+        }
         if ((event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp)
                 && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
             event.accepted = true

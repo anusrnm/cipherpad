@@ -23,6 +23,15 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
   Existing destinations are never overwritten; cross-volume cut/paste reports an error.
   Delete uses Trash/Recycle Bin and closes clean open tabs, but refuses items with
   unsaved documents and workspace roots. Renaming/moving keeps open tabs and watchers in sync.
+- **Explorer multi-selection**: Ctrl-click toggles files or folders; Shift-click
+  and Shift+Up/Down/Home/End select a visible range. Ctrl+A selects all visible
+  non-root items; Escape clears the selection. Right-click preserves an existing
+  selection. Cut/copy/paste (`Ctrl+X/C/V`), **Move Selected Items To...**, and
+  confirmed Delete operate on the selection, including folders. Selecting a folder
+  and its children processes the folder only once. Bulk operations preflight root
+  protections, destination conflicts and (for deletion) unsaved/pinned tabs before
+  starting. An I/O failure stops the batch and reports partial completion; completed
+  items are not rolled back, and failed/unprocessed cut items remain available to paste.
 - Atomic saves (temp file + `os.replace`) so a crash never truncates your file
 - External-change detection via `QFileSystemWatcher`
 - Encoding and line-ending (LF / CRLF / CR) detection, preserved on save
@@ -62,6 +71,16 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
   diff, log, …), auto-detected from file name, shebang or content, and overridable from
   the toolbar
 - Line numbers, current-line highlight, whitespace visualisation, word wrap
+- **Code folding**: click the arrow beside a line number or use `Ctrl+Shift+[`
+  to toggle a fold starting on the current line. The editor's right-click menu
+  also offers **Toggle Fold**, **Fold All**, and **Unfold All**. Folding recognises
+  bracketed blocks, multiline strings/comments, Python/YAML indentation,
+  XML/HTML tags, Markdown headings/fences, TOML/INI sections, shell/SQL blocks,
+  Dockerfile stages and diff sections. Plain text has no folds; other modes offer
+  folds where their structure permits. Folding does not change saved text,
+  modification state or undo history. Nested folds are preserved when an outer fold
+  is reopened; navigating into hidden text reveals it. Folds are local to each pane
+  and reset when text is edited, reloaded or the language changes.
 - Find / Replace bar with case-sensitive, whole-word and regular-expression modes,
   match counter, wrap-around, Replace and Replace All
 - Go to line, duplicate / delete / move / join lines, sort (asc/desc), unique lines,

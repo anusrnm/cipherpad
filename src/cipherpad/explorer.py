@@ -199,6 +199,7 @@ class ProjectExplorer(QAbstractListModel):
         self._items: list[ExplorerNode] = []
         self._watcher: QFileSystemWatcher | None = None
         self._clipboard_path = ""
+        self._clipboard_paths: list[str] = []
         self._clipboard_cut = False
         self._documents: DocumentManager | None = None
         self._show_hidden = False
@@ -251,7 +252,93 @@ class ProjectExplorer(QAbstractListModel):
 
     @Property(bool, notify=clipboardChanged)
     def canPaste(self) -> bool:
-        return bool(self._clipboard_path)
+        return bool(self._clipboard_path or self._clipboard_paths)
+
+    def _batch_paths(self, raw_paths: list[str], destructive: bool = False) -> list[str]:
+        paths = list(dict.fromkeys(normalize_folder_path(path) for path in raw_paths))
+        if not paths:
+            self.errorOccurred.emit("Select at least one explorer item.")
+            return []
+        if not all(self._validate_item(path, destructive) for path in paths):
+            return []
+        return [
+            path for path in paths
+            if not any(
+                os.path.normcase(path).startswith(os.path.normcase(parent) + os.sep)
+                and os.path.isdir(parent) and not os.path.islink(parent)
+                for parent in paths if parent != path
+            )
+        ]
+
+    @Slot("QStringList", bool, result=bool)
+    def copyItems(self, raw_paths: list[str], cut: bool) -> bool:
+        paths = self._batch_paths(raw_paths, destructive=cut)
+        if not paths:
+            return False
+        self._clipboard_paths = paths
+        self._clipboard_path = ""
+        self._clipboard_cut = cut
+        self.clipboardChanged.emit()
+        return True
+
+    @Slot(str, result="QStringList")
+    def pasteItems(self, raw_directory: str) -> list[str]:
+        if not self._clipboard_paths:
+            result = self.pasteItem(raw_directory)
+            return [result] if result else []
+        paths = list(self._clipboard_paths)
+        results = self.transferItems(paths, raw_directory, self._clipboard_cut)
+        if self._clipboard_cut:
+            self._clipboard_paths = paths[len(results):]
+            self.clipboardChanged.emit()
+        return results
+
+    @Slot("QStringList", str, bool, result="QStringList")
+    def transferItems(self, raw_paths: list[str], raw_directory: str, move: bool) -> list[str]:
+        paths = self._batch_paths(raw_paths, destructive=move)
+        if not paths:
+            return []
+        directory = normalize_folder_path(raw_directory)
+        if not os.path.isdir(directory):
+            self.errorOccurred.emit("Paste destination is not a directory.")
+            return []
+        targets = [os.path.join(directory, os.path.basename(path)) for path in paths]
+        if len({os.path.normcase(path) for path in targets}) != len(targets):
+            self.errorOccurred.emit("Selected items have conflicting destination names.")
+            return []
+        for source, target in zip(paths, targets):
+            source_real = os.path.normcase(os.path.realpath(source))
+            target_real = os.path.normcase(os.path.realpath(target))
+            if os.path.lexists(target):
+                self.errorOccurred.emit(f"Target already exists: {target}")
+                return []
+            if target_real == source_real or target_real.startswith(source_real + os.sep):
+                self.errorOccurred.emit("Cannot copy or move a folder into itself.")
+                return []
+        results: list[str] = []
+        for source, target in zip(paths, targets):
+            result = self._transfer_item(source, target, move)
+            if not result:
+                self.errorOccurred.emit(f"Bulk operation stopped after {len(results)} of {len(paths)} items.")
+                break
+            results.append(result)
+        return results
+
+    @Slot("QStringList", result="QStringList")
+    def deleteItems(self, raw_paths: list[str]) -> list[str]:
+        paths = self._batch_paths(raw_paths, destructive=True)
+        for path in paths:
+            documents = self._documents.documents_under_path(path) if self._documents is not None else []
+            if any(doc.pinned or doc.modified for doc in documents):
+                self.errorOccurred.emit("Unpin and save or close documents in the selection before deleting it.")
+                return []
+        deleted: list[str] = []
+        for path in paths:
+            if not self.deleteItem(path):
+                self.errorOccurred.emit(f"Bulk deletion stopped after {len(deleted)} of {len(paths)} items.")
+                break
+            deleted.append(path)
+        return deleted
 
     @Slot(str, result=str)
     def parentDirectory(self, raw_path: str) -> str:
@@ -286,6 +373,7 @@ class ProjectExplorer(QAbstractListModel):
         if not self._validate_item(path, destructive=cut):
             return False
         self._clipboard_path = path
+        self._clipboard_paths = []
         self._clipboard_cut = cut
         self.clipboardChanged.emit()
         return True
@@ -378,6 +466,9 @@ class ProjectExplorer(QAbstractListModel):
         self._expanded_paths = {relocated(path) for path in self._expanded_paths}
         if self._clipboard_path:
             self._clipboard_path = relocated(self._clipboard_path)
+            self.clipboardChanged.emit()
+        if self._clipboard_paths:
+            self._clipboard_paths = [relocated(path) for path in self._clipboard_paths]
             self.clipboardChanged.emit()
         if self._documents is not None:
             self._documents.relocate_documents(old_path, new_path)
@@ -786,6 +877,13 @@ class ProjectExplorer(QAbstractListModel):
                 self._documents.closeDocument(self._documents.indexOf(doc))
         if self._clipboard_path == path or self._clipboard_path.startswith(path + os.sep):
             self._clipboard_path = ""
+            self.clipboardChanged.emit()
+        remaining = [
+            item for item in self._clipboard_paths
+            if item != path and not item.startswith(path + os.sep)
+        ]
+        if remaining != self._clipboard_paths:
+            self._clipboard_paths = remaining
             self.clipboardChanged.emit()
         self._expanded_paths = {p for p in self._expanded_paths if p != path and not p.startswith(path + os.sep)}
         self._rebuild_tree()
