@@ -139,6 +139,10 @@ class Document(QObject):
         self._language = "plain"
         self._read_only = False
         self._loaded_text = ""
+        self._saved_text: str | None = ""
+        self._saved_encoding = self._encoding
+        self._saved_line_ending = self._line_ending
+        self._text_modified = False
         self._watcher: QFileSystemWatcher | None = None
         self._suppress_watch = False
         self._locked_buffer = b""
@@ -210,7 +214,7 @@ class Document(QObject):
             return
         self._encoding = value
         self.encodingChanged.emit()
-        self.modified = True
+        self._update_modified()
 
     @Property(str, notify=lineEndingChanged)
     def lineEnding(self) -> str:
@@ -222,7 +226,7 @@ class Document(QObject):
             return
         self._line_ending = value
         self.lineEndingChanged.emit()
-        self.modified = True
+        self._update_modified()
 
     @Property(str, notify=languageChanged)
     def language(self) -> str:
@@ -252,6 +256,13 @@ class Document(QObject):
         return [{"id": lid, "name": name} for lid, name in language_names()]
 
     # ------------------------------------------------------------- slots
+    @Slot(str)
+    def updateModified(self, text: str) -> None:
+        if self.locked:
+            return
+        self._text_modified = self._saved_text is None or text != self._saved_text
+        self._update_modified()
+
     @Slot(str, result=bool)
     @Slot(str, str, result=bool)
     def load(self, path: str, passphrase: str = "") -> bool:
@@ -297,7 +308,7 @@ class Document(QObject):
         self._loaded_text = normalize_newlines(text)
         self._read_only = os.path.exists(path) and not os.access(path, os.W_OK)
         self._set_path(path)
-        self.modified = False
+        self._mark_clean()
 
         self.encodingChanged.emit()
         self.lineEndingChanged.emit()
@@ -424,6 +435,7 @@ class Document(QObject):
         self._unwatch()
         self._passphrase = ""
         self._loaded_text = ""
+        self._saved_text = None
         self._locked_buffer = b""
         self.closed.emit()
 
@@ -434,7 +446,10 @@ class Document(QObject):
         if not self._encrypted or not self._passphrase:
             self.errorOccurred.emit("Only unlocked encrypted tabs can be locked.")
             return False
-        payload = json.dumps({"text": text, "modified": self.modified}, ensure_ascii=True).encode("utf-8")
+        payload = json.dumps(
+            {"text": text, "modified": self.modified, "saved_text": self._saved_text},
+            ensure_ascii=True,
+        ).encode("utf-8")
         try:
             self._locked_buffer = crypto.encrypt(payload, self._passphrase)
         except crypto.CryptoError as exc:
@@ -442,6 +457,7 @@ class Document(QObject):
             return False
         self._passphrase = ""
         self._loaded_text = ""
+        self._saved_text = None
         self.lockedChanged.emit()
         self.contentLoaded.emit("")
         return True
@@ -456,6 +472,7 @@ class Document(QObject):
             self.errorOccurred.emit(f"Could not unlock tab: {exc}")
             return False
         self._loaded_text = payload["text"]
+        self._saved_text = payload["saved_text"]
         self.modified = payload["modified"]
         self._passphrase = passphrase
         self._locked_buffer = b""
@@ -464,6 +481,20 @@ class Document(QObject):
         return True
 
     # ------------------------------------------------------------ helpers
+    def _update_modified(self) -> None:
+        self.modified = (
+            self._text_modified
+            or self._encoding != self._saved_encoding
+            or self._line_ending != self._saved_line_ending
+        )
+
+    def _mark_clean(self) -> None:
+        self._saved_text = self._loaded_text
+        self._saved_encoding = self._encoding
+        self._saved_line_ending = self._line_ending
+        self._text_modified = False
+        self.modified = False
+
     def _write(self, path: str, text: str, encrypt: bool, passphrase: str) -> bool:
         if self.locked:
             self.errorOccurred.emit("Unlock this tab before saving or changing encryption.")
@@ -497,7 +528,7 @@ class Document(QObject):
             self._suppress_watch = False
 
         self._loaded_text = normalize_newlines(text)
-        self.modified = False
+        self._mark_clean()
         self.saved.emit()
         return True
 
@@ -647,6 +678,8 @@ class DocumentManager(QAbstractListModel):
             return -1
         document = Document("Recovered - " + title, self)
         document._loaded_text = text
+        document._saved_text = None
+        document._text_modified = True
         document.language = language
         document._encoding = encoding
         document._line_ending = line_ending

@@ -14,6 +14,9 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
 
 ### Files
 - Multiple documents in tabs, with per-tab modified indicator and close buttons
+- Modified indicators clear when undo or manual edits restore the last loaded or
+  saved text, provided encoding and line endings are also unchanged; redo updates
+  them again.
 - Open / Save / Save As / Reload from disk, recent-files list, optional session restore
 - Multi-folder project explorer for browsing and managing files and folders
 - Explorer right-click actions: create files/folders, rename, duplicate, cut/copy/paste,

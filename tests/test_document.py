@@ -77,6 +77,103 @@ def test_save_updates_existing_file(doc: Document, tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "two"
 
 
+def test_modified_tracks_saved_content(doc: Document, tmp_path: Path) -> None:
+    assert doc.saveAs(str(tmp_path / "note.txt"), "original")
+    changes: list[bool] = []
+    doc.modifiedChanged.connect(lambda: changes.append(doc.modified))
+    doc.updateModified("edited")
+    assert doc.modified
+    doc.updateModified("edited")
+    doc.updateModified("original")
+    assert not doc.modified
+    doc.updateModified("edited")
+    assert doc.modified
+    assert changes == [True, False, True]
+
+
+def test_modified_tracks_loaded_and_reloaded_content(doc: Document, tmp_path: Path) -> None:
+    target = tmp_path / "note.txt"
+    target.write_bytes(b"original\r\n")
+    assert doc.load(str(target))
+    doc.updateModified("edited\n")
+    assert doc.modified
+    doc.updateModified("original\n")
+    assert not doc.modified
+    target.write_bytes(b"replacement\r\n")
+    assert doc.reload()
+    doc.updateModified("original\n")
+    assert doc.modified
+    doc.updateModified("replacement\n")
+    assert not doc.modified
+
+
+def test_modified_baseline_moves_only_after_successful_save(doc: Document, tmp_path: Path) -> None:
+    assert doc.saveAs(str(tmp_path / "note.txt"), "original")
+    assert doc.save("edited")
+    doc.updateModified("original")
+    assert doc.modified
+    doc.updateModified("edited")
+    assert not doc.modified
+    doc.encoding = "ascii"
+    assert not doc.save("\u00e9")
+    doc.encoding = "utf-8"
+    doc.updateModified("edited")
+    assert not doc.modified
+    doc.updateModified("\u00e9")
+    assert doc.modified
+
+
+@pytest.mark.parametrize("setting,value", [("encoding", "latin-1"), ("lineEnding", "crlf")])
+def test_text_undo_preserves_unsaved_format_changes(
+    doc: Document, tmp_path: Path, setting: str, value: str,
+) -> None:
+    assert doc.saveAs(str(tmp_path / "note.txt"), "original")
+    original = getattr(doc, setting)
+    setattr(doc, setting, value)
+    doc.updateModified("edited")
+    doc.updateModified("original")
+    assert doc.modified
+    setattr(doc, setting, original)
+    assert not doc.modified
+    doc.updateModified("edited")
+    setattr(doc, setting, value)
+    setattr(doc, setting, original)
+    assert doc.modified
+
+
+def test_untitled_modified_clears_when_empty(doc: Document) -> None:
+    doc.updateModified("text")
+    assert doc.modified
+    doc.updateModified("")
+    assert not doc.modified
+
+
+def test_recovered_document_stays_modified_until_saved(manager: DocumentManager, tmp_path: Path) -> None:
+    index = manager.newRecovered("recovered", "note", "plain", "utf-8", "lf")
+    recovered = manager.documentAt(index)
+    recovered.updateModified("")
+    assert recovered.modified
+    recovered.updateModified("recovered")
+    assert recovered.modified
+    assert recovered.saveAs(str(tmp_path / "recovered.txt"), "recovered")
+    recovered.updateModified("edit")
+    recovered.updateModified("recovered")
+    assert not recovered.modified
+
+
+def test_locked_document_preserves_clean_baseline(doc: Document, tmp_path: Path) -> None:
+    assert doc.saveAs(str(tmp_path / "secret.txt"), "original", True, "pw")
+    doc.updateModified("edited")
+    assert doc.lock("edited")
+    doc.updateModified("")
+    assert doc.modified
+    assert doc.unlock("pw")
+    doc.updateModified("edited")
+    assert doc.modified
+    doc.updateModified("original")
+    assert not doc.modified
+
+
 def test_save_emits_saved_signal(doc: Document, tmp_path: Path) -> None:
     seen: list[bool] = []
     doc.saved.connect(lambda: seen.append(True))

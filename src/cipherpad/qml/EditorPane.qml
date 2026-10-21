@@ -133,13 +133,8 @@ Item {
         function onExternallyChanged() { if (!pane.doc.locked) pane.externalChangeRequested() }
     }
 
-    // Tracks the text last known to correspond to the document's on-disk /
-    // clean state. Syntax highlighting reformats the block(s) whenever the
-    // palette, language, tab width, etc. change, and that reformatting fires
-    // TextArea.onTextChanged even though the actual characters are unchanged
-    // (Qt Quick's TextEdit re-emits textChanged on any document content
-    // reflow, not just genuine edits). Comparing against the last-known text
-    // avoids marking the document dirty for these no-op reflows.
+    // Highlighting and layout can emit textChanged without changing characters.
+    // Skip those notifications; Document compares genuine edits to its saved state.
     property string _lastKnownText: ""
 
     function adoptContent(text) {
@@ -253,7 +248,7 @@ Item {
                         if (editor.text !== pane._lastKnownText) {
                             pane._lastKnownText = editor.text
                             if (pane.doc && !pane.doc.locked)
-                                pane.doc.modified = true
+                                pane.doc.updateModified(editor.text)
                         }
                         gutter.refresh()
                     }

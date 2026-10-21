@@ -429,6 +429,27 @@ def _check_pretty_print_qml(settings_directory: str) -> None:
         wait_for_workspace()
         assert all(not entry["path"].endswith(".py") for entry in workspace_tools.quickFiles(""))
         evaluate("workspacePicker.close()")
+        manager.newDocument()
+        qt_app.processEvents()
+        evaluate("currentPane.editor.insert(0, 'original')")
+        assert manager.currentDocument.modified
+        evaluate("currentPane.editor.undo()")
+        assert not manager.currentDocument.modified
+        evaluate("currentPane.editor.redo()")
+        assert manager.currentDocument.modified
+        target = Path(settings_directory) / "dirty-state.txt"
+        assert manager.currentDocument.saveAs(str(target), "original")
+        evaluate("currentPane.editor.insert(0, 'edit')")
+        assert manager.currentDocument.modified
+        evaluate("currentPane.editor.undo()")
+        assert not manager.currentDocument.modified
+        evaluate("currentPane.editor.redo()")
+        assert manager.currentDocument.modified
+        assert manager.currentDocument.save(evaluate("currentPane.editor.text"))
+        evaluate("currentPane.editor.undo()")
+        assert manager.currentDocument.modified
+        evaluate("currentPane.editor.redo()")
+        assert not manager.currentDocument.modified
         assert not warnings
     finally:
         workspace_tools.shutdown()
