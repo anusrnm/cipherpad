@@ -46,6 +46,14 @@ ApplicationWindow {
             comparisonDialog.showComparison({diff: diff, left: "", right: "", leftName: "Git", rightName: path, equal: diff === "", unifiedOnly: true}, null, false)
         }
     }
+    Connections {
+        target: Explorer
+        function onAutoRefreshCompleted(itemCount, directoryCount, elapsedMs) {
+            status.flash("Disk refresh: " + itemCount + " visible items \u00b7 "
+                         + directoryCount + (directoryCount === 1 ? " directory" : " directories")
+                         + " \u00b7 " + elapsedMs + " ms")
+        }
+    }
     function workingDirectory() {
         if (currentDoc && currentDoc.filePath)
             return Explorer.parentDirectory(currentDoc.filePath)
@@ -571,6 +579,7 @@ ApplicationWindow {
         heading: "Discard edits and reload?"
         property var document: null
         standardButtons: Dialog.Discard | Dialog.Cancel
+        defaultButton: Dialog.Cancel
         Label {
             width: parent.width
             text: "Reloading will discard unsaved edits in " + (reloadConfirm.document ? reloadConfirm.document.displayName : "") + "."
@@ -738,6 +747,7 @@ ApplicationWindow {
         id: recoveryDiscard
         heading: "Discard recovery snapshot?"
         standardButtons: Dialog.Yes | Dialog.No
+        defaultButton: Dialog.No
         property string identifier: ""
         Label { text: "This permanently removes the selected recovery snapshot."; color: Prefs.chromeText }
         onAccepted: {

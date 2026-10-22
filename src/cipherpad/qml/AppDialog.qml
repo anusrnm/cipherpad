@@ -7,11 +7,28 @@ Dialog {
     id: root
 
     property string heading: title
+    property Item initialFocusItem: null
+    property int defaultButton: {
+        const buttons = [Dialog.Save, Dialog.Ok, Dialog.Yes, Dialog.Retry,
+                         Dialog.Close, Dialog.Cancel, Dialog.No, Dialog.Discard]
+        for (const button of buttons) {
+            if (standardButtons & button)
+                return button
+        }
+        return Dialog.NoButton
+    }
 
     modal: true
+    focus: true
     anchors.centerIn: Overlay.overlay
     closePolicy: Popup.CloseOnEscape
     padding: 16
+
+    onOpened: {
+        const target = initialFocusItem || standardButton(defaultButton)
+        if (target && target.enabled && target.visible)
+            target.forceActiveFocus(Qt.TabFocusReason)
+    }
 
     Overlay.modal: Rectangle { color: "#99000000" }
 
@@ -54,6 +71,10 @@ Dialog {
                 color: Prefs.border
             }
         }
-        delegate: BarButton { wide: true }
+        delegate: BarButton {
+            wide: true
+            Keys.onReturnPressed: clicked()
+            Keys.onEnterPressed: clicked()
+        }
     }
 }

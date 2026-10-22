@@ -8,6 +8,7 @@ AppDialog {
     width: Math.min(720, parent.width - 40)
     height: Math.min(560, parent.height - 40)
     standardButtons: Dialog.Close
+    initialFocusItem: query
     property bool commandsMode: false
     property var commands: []
     property var results: []

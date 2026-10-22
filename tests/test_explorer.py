@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QFile, Qt
+from PySide6.QtTest import QSignalSpy, QTest
 
 from cipherpad.explorer import ProjectExplorer
 
@@ -43,6 +44,52 @@ def test_starts_empty(explorer: ProjectExplorer) -> None:
     assert explorer.rowCount() == 0
     assert explorer.rootFolderCount == 0
     assert explorer.rootFolders == []
+
+
+def test_auto_refresh_reports_coalesced_run_details(explorer: ProjectExplorer, sample_tree: Path) -> None:
+    explorer.addFolder(str(sample_tree))
+    spy = QSignalSpy(explorer.autoRefreshCompleted)
+
+    explorer._on_directory_changed(str(sample_tree))
+    explorer._on_directory_changed(str(sample_tree / "src"))
+    QTest.qWait(250)
+
+    assert spy.count() == 1
+    item_count, directory_count, elapsed_ms = spy.at(0)
+    assert item_count == explorer.count
+    assert directory_count == 2
+    assert elapsed_ms >= 0
+
+
+def test_new_empty_directory_refreshes_when_populated(explorer: ProjectExplorer, tmp_path: Path) -> None:
+    explorer.addFolder(str(tmp_path))
+    watcher = explorer._watcher
+    model = explorer.treeModel
+    new_dir = tmp_path / "new"
+    spy = QSignalSpy(explorer.autoRefreshCompleted)
+    new_dir.mkdir()
+    assert spy.wait(3000)
+    assert str(new_dir) in watcher.directories()
+
+    root_index = model.index(0, 0)
+    directory_index = model.index(0, 0, root_index)
+    assert model.data(directory_index, explorer.PathRole) == str(new_dir)
+    assert not model.hasChildren(directory_index)
+
+    child = new_dir / "child.txt"
+    child.write_text("new file", encoding="utf-8")
+    assert spy.wait(3000)
+    assert explorer._watcher is watcher
+    root_index = model.index(0, 0)
+    directory_index = model.index(0, 0, root_index)
+    assert model.hasChildren(directory_index)
+    assert model.data(model.index(0, 0, directory_index), explorer.PathRole) == str(child)
+    explorer.expand(str(new_dir))
+    assert any(explorer.itemAt(i)["path"] == str(child) for i in range(explorer.count))
+
+    child.unlink()
+    assert spy.wait(3000)
+    assert not any(explorer.itemAt(i)["path"] == str(child) for i in range(explorer.count))
 
 
 def test_bulk_copy_cut_and_move(explorer: ProjectExplorer, sample_tree: Path) -> None:

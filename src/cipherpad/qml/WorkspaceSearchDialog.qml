@@ -9,6 +9,7 @@ AppDialog {
     width: Math.min(860, parent.width - 40)
     height: Math.min(650, parent.height - 40)
     standardButtons: Dialog.Close
+    initialFocusItem: query
     signal matchRequested(var match)
 
     function showSearch() {

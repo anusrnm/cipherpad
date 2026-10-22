@@ -25,6 +25,7 @@ AppDialog {
 
     heading: confirming ? "Set passphrase" : "Enter passphrase"
     standardButtons: Dialog.Ok | Dialog.Cancel
+    initialFocusItem: passField
     width: 420
 
     function promptUnlock(name, message) {
@@ -47,7 +48,6 @@ AppDialog {
         passField.forceActiveFocus()
     }
 
-    onOpened: passField.forceActiveFocus()
     onAccepted: root.passphraseAccepted(passField.text)
     onClosed: {
         passField.text = ""

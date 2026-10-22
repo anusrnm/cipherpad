@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -21,6 +22,7 @@ from PySide6.QtCore import (
     QFile,
     QModelIndex,
     QObject,
+    QTimer,
     Qt,
     QUrl,
     Signal,
@@ -191,6 +193,7 @@ class ProjectExplorer(QAbstractListModel):
     errorOccurred = Signal(str)
     clipboardChanged = Signal()
     optionsChanged = Signal()
+    autoRefreshCompleted = Signal(int, int, int)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -205,6 +208,11 @@ class ProjectExplorer(QAbstractListModel):
         self._show_hidden = False
         self._ignore_patterns = ";".join(sorted(IGNORED_NAMES))
         self._filter_paths: set[str] | None = None
+        self._pending_changed_dirs: set[str] = set()
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setSingleShot(True)
+        self._auto_refresh_timer.setInterval(150)
+        self._auto_refresh_timer.timeout.connect(self._refresh_after_disk_change)
         self._tree_model = ProjectExplorerTreeModel(self)
 
     def bind_documents(self, documents: DocumentManager) -> None:
@@ -1023,22 +1031,40 @@ class ProjectExplorer(QAbstractListModel):
         self._update_watcher()
 
     def _update_watcher(self) -> None:
-        if self._watcher is not None:
-            self._pause_watching()
-            self._watcher.deleteLater()
-            self._watcher = None
-
-        watch_dirs = [p for p in self._expanded_paths if os.path.isdir(p)]
-        for root in self._root_folders:
-            if root not in watch_dirs and os.path.isdir(root):
-                watch_dirs.append(root)
-
-        if watch_dirs:
-            self._watcher = QFileSystemWatcher(watch_dirs, self)
+        if self._watcher is None:
+            self._watcher = QFileSystemWatcher(self)
             self._watcher.directoryChanged.connect(self._on_directory_changed)
 
+        # Empty collapsed folders need watches too: TreeView caches their children.
+        watch_dirs = {
+            path for path in (
+                self._expanded_paths
+                | set(self._root_folders)
+                | {node.path for node in self._items if node.is_dir}
+            )
+            if os.path.isdir(path)
+        }
+        current_dirs = set(self._watcher.directories())
+        removed = current_dirs - watch_dirs
+        if removed:
+            self._watcher.removePaths(sorted(removed))
+        added = watch_dirs - current_dirs
+        if added:
+            failed = self._watcher.addPaths(sorted(added))
+            if failed:
+                self.errorOccurred.emit("Could not watch directories for disk changes: " + ", ".join(failed))
+
     def _on_directory_changed(self, _path: str) -> None:
+        self._pending_changed_dirs.add(_path)
+        self._auto_refresh_timer.start()
+
+    def _refresh_after_disk_change(self) -> None:
+        changed_dir_count = len(self._pending_changed_dirs)
+        self._pending_changed_dirs.clear()
+        started = time.perf_counter()
         self._rebuild_tree()
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        self.autoRefreshCompleted.emit(len(self._items), changed_dir_count, elapsed_ms)
 
 
 class ProjectExplorerTreeModel(QAbstractItemModel):

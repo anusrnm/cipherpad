@@ -7,6 +7,9 @@ runs.
 
 The Python side owns everything that benefits from real code (encryption, file I/O,
 syntax highlighting, search, text transformations, preferences); QML owns the UI.
+Confirmation and message dialogs focus a default button for keyboard use (Enter
+activates it); destructive confirmations default to Cancel or No. Text-entry
+prompts keep their input field focused.
 
 ---
 
@@ -30,13 +33,17 @@ syntax highlighting, search, text transformations, preferences); QML owns the UI
   and Shift+Up/Down/Home/End select a visible range. Ctrl+A selects all visible
   non-root items; Escape clears the selection. Right-click preserves an existing
   selection. Cut/copy/paste (`Ctrl+X/C/V`), **Move Selected Items To...**, and
-  confirmed Delete operate on the selection, including folders. Selecting a folder
+  confirmed Delete operate on the selection, including folders. **Shift+Delete**
+  skips confirmation (still using Trash/Recycle Bin and the same safety checks).
+  Selecting a folder
   and its children processes the folder only once. Bulk operations preflight root
   protections, destination conflicts and (for deletion) unsaved/pinned tabs before
   starting. An I/O failure stops the batch and reports partial completion; completed
   items are not rolled back, and failed/unprocessed cut items remain available to paste.
 - Atomic saves (temp file + `os.replace`) so a crash never truncates your file
 - External-change detection via `QFileSystemWatcher`
+- Explorer watches visible directories, including empty collapsed folders, so files
+  added inside newly created directories appear without a manual refresh.
 - Encoding and line-ending (LF / CRLF / CR) detection, preserved on save
 - Refuses to open binary files instead of mangling them
 

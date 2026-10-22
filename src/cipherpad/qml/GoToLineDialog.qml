@@ -10,6 +10,7 @@ AppDialog {
 
     heading: "Go to line"
     standardButtons: Dialog.Ok | Dialog.Cancel
+    initialFocusItem: field
     width: 300
 
     function promptFor(count, current) {

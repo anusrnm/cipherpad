@@ -246,6 +246,42 @@ def _check_ui(directory):
         return None
 
     try:
+        for dialog in ("messageDialog", "unsavedDialog", "reloadConfirm", "recoveryDiscard",
+                       "prefsDialog", "aboutDialog", "statsDialog", "comparisonDialog",
+                       "validationDialog", "jsonTreeDialog", "recoveryDialog", "compareTabDialog"):
+            evaluate(f"{dialog}.open()")
+            QTest.qWait(250)
+            assert evaluate(f"{dialog}.standardButton({dialog}.defaultButton).activeFocus"), dialog
+            assert evaluate(f"Qt.colorEqual({dialog}.standardButton({dialog}.defaultButton).background.border.color, Prefs.accent)"), dialog
+            if dialog in ("reloadConfirm", "recoveryDiscard", "unsavedDialog"):
+                expected = {"reloadConfirm": "Cancel", "recoveryDiscard": "No", "unsavedDialog": "Save"}[dialog]
+                assert evaluate(f"{dialog}.standardButton({dialog}.defaultButton).text").replace("&", "") == expected
+            evaluate(f"{dialog}.close()")
+            QTest.qWait(250)
+
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            evaluate("messageDialog.show('Keyboard focus test')")
+            QTest.qWait(250)
+            QTest.keyClick(window, key)
+            QTest.qWait(250)
+            assert not evaluate("messageDialog.visible")
+
+        evaluate("reloadConfirm.open()")
+        QTest.qWait(250)
+        assert evaluate("reloadConfirm.standardButton(reloadConfirm.defaultButton).text").replace("&", "") == "Cancel"
+        QTest.keyClick(window, Qt.Key.Key_Return)
+        QTest.qWait(250)
+        assert not evaluate("reloadConfirm.visible")
+
+        for source, dialog in (("gotoDialog.promptFor(10, 3)", "gotoDialog"),
+                               ("passphraseDialog.promptUnlock('test', '')", "passphraseDialog"),
+                               ("workspaceSearchDialog.showSearch()", "workspaceSearchDialog")):
+            evaluate(source)
+            QTest.qWait(250)
+            assert evaluate(f"{dialog}.initialFocusItem.activeFocus"), dialog
+            evaluate(f"{dialog}.close()")
+            QTest.qWait(250)
+
         root = Path(directory)
         first = root / "one.txt"
         second = root / "two.txt"
@@ -489,6 +525,18 @@ def _check_ui(directory):
             QTest.keyClick(window, Qt.Key.Key_Delete)
             assert QMetaObject.invokeMethod(confirmation, "accept")
             assert not (moved / "a.txt").exists() and not (moved / "bundle").exists()
+            QTest.qWait(250)
+            quick_file = moved / "quick.txt"
+            quick_folder = moved / "quick-folder"
+            quick_file.write_text("quick")
+            quick_folder.mkdir()
+            (quick_folder / "child.txt").write_text("child")
+            project.refresh()
+            application.processEvents()
+            evaluate(f"explorerSidebar.selectPath({str(quick_file)!r}, false, false); explorerSidebar.selectPath({str(quick_folder)!r}, true, true)")
+            QTest.keyClick(window, Qt.Key.Key_Delete, Qt.KeyboardModifier.ShiftModifier)
+            assert not confirmation.property("visible")
+            assert not quick_file.exists() and not quick_folder.exists()
         finally:
             QFile.moveToTrash = original_trash
         assert not warnings, warnings

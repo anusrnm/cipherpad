@@ -104,6 +104,7 @@ AppDialog {
         objectName: "gitCommitConfirm"
         heading: "Commit all staged changes?"
         standardButtons: Dialog.Yes | Dialog.Cancel
+        defaultButton: Dialog.Cancel
         width: 460
         Label {
             width: parent.width

@@ -28,7 +28,7 @@ Button {
         color: control.down ? Prefs.accent
                : control.hovered ? Prefs.border
                : "transparent"
-        border.color: control.wide ? Prefs.border : "transparent"
+        border.color: control.activeFocus ? Prefs.accent : control.wide ? Prefs.border : "transparent"
         border.width: 1
     }
 }

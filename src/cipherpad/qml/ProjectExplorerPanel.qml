@@ -255,6 +255,7 @@ Rectangle {
         property string sourcePath: ""
         heading: itemType === "rename" ? "Rename Item" : (itemType === "file" ? "New File" : "New Folder")
         standardButtons: Dialog.Ok | Dialog.Cancel
+        initialFocusItem: nameField
         width: 360
 
         function prompt(type, dir) {
@@ -315,6 +316,7 @@ Rectangle {
         objectName: "explorerDeleteDialog"
         heading: targetPaths.length > 1 ? "Delete Selected Items" : "Delete Item"
         standardButtons: Dialog.Yes | Dialog.Cancel
+        defaultButton: Dialog.Cancel
         width: 420
         property string targetPath: ""
         property string targetName: ""
@@ -556,8 +558,12 @@ Rectangle {
                     root.selectIndex(Explorer.count - 1, range)
                     break
                 case Qt.Key_Delete:
-                    if (root.canModifySelection)
-                        deleteDialog.prompt(root.selectedPath, Explorer.itemAt(root.currentExplorerRow).name || "")
+                    if (root.canModifySelection) {
+                        if (range)
+                            Explorer.deleteItems(root.selectedPaths)
+                        else
+                            deleteDialog.prompt(root.selectedPath, Explorer.itemAt(root.currentExplorerRow).name || "")
+                    }
                     break
                 case Qt.Key_Escape:
                     root.selectedPaths = []
