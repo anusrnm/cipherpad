@@ -1402,8 +1402,10 @@ ApplicationWindow {
 
                     ListView {
                         id: tabBar
+                        objectName: "documentTabs"
                         anchors.fill: parent
                         orientation: ListView.Horizontal
+                        flickableDirection: Flickable.HorizontalFlick
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
                         interactive: contentWidth > width
@@ -1418,11 +1420,16 @@ ApplicationWindow {
                         }
 
                         WheelHandler {
-                            acceptedDevices: PointerDevice.Mouse
+                            target: null
+                            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                             onWheel: (event) => {
-                                const delta = event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x
-                                tabBar.contentX = Math.max(0, Math.min(tabBar.contentWidth - tabBar.width,
+                                const pixels = event.pixelDelta
+                                const delta = pixels.x !== 0 ? pixels.x : pixels.y !== 0 ? pixels.y
+                                            : event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x
+                                tabBar.contentX = Math.max(tabBar.originX, Math.min(
+                                                                       tabBar.originX + Math.max(0, tabBar.contentWidth - tabBar.width),
                                                                        tabBar.contentX - delta))
+                                event.accepted = true
                             }
                         }
 

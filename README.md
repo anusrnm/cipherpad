@@ -81,6 +81,12 @@ prompts keep their input field focused.
   diff, log, …), auto-detected from file name, shebang or content, and overridable from
   the toolbar
 - Line numbers, current-line highlight, whitespace visualisation, word wrap
+- Selecting text highlights all exact, case-sensitive occurrences in that pane.
+  A narrow overview beside the vertical scrollbar marks their document positions;
+  click a marker to jump to the nearest occurrence. Clearing the selection clears
+  the highlights; whitespace-only selections are ignored. Find highlighting remains
+  independent and takes precedence where matches overlap.
+  Qt Quick TextArea does not provide a built-in document minimap.
 - **Code folding**: click the arrow beside a line number or use `Ctrl+Shift+[`
   to toggle a fold starting on the current line. The editor's right-click menu
   also offers **Toggle Fold**, **Fold All**, and **Unfold All**. Folding recognises

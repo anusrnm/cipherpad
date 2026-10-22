@@ -90,6 +90,7 @@ Item {
     // ------------------------------------------------------- highlighting
     SyntaxHighlighter {
         id: highlighter
+        objectName: "selectionHighlighter"
         document: editor.textDocument
         language: pane.doc ? pane.doc.language : "plain"
         enabled: Prefs.syntaxHighlighting
@@ -106,6 +107,15 @@ Item {
         highlighter.setPalette(Prefs.syntaxPalette())
         highlighter.setTabWidth(Prefs.tabWidth)
         highlighter.setShowWhitespace(Prefs.showWhitespace)
+        selectionTimer.restart()
+    }
+
+    Timer {
+        id: selectionTimer
+        interval: 100
+        onTriggered: highlighter.setSelectionHighlight(
+                         pane.doc && pane.doc.locked ? "" : editor.selectedText,
+                         Prefs.selection)
     }
 
     function applySearchHighlight(pattern, caseSensitive, wholeWord, regex) {
@@ -200,7 +210,7 @@ Item {
 
             Flickable {
                 id: flick
-                width: parent.width - gutter.width - (gutter.visible ? 1 : 0)
+                width: parent.width - gutter.width - (gutter.visible ? 1 : 0) - matchOverview.width
                 height: parent.height
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
@@ -249,11 +259,15 @@ Item {
                             pane._lastKnownText = editor.text
                             if (pane.doc && !pane.doc.locked)
                                 pane.doc.updateModified(editor.text)
+                            selectionTimer.restart()
                         }
                         gutter.refresh()
                     }
                     onCursorPositionChanged: pane.updateCursorInfo()
-                    onSelectedTextChanged: pane.statusChanged()
+                    onSelectedTextChanged: {
+                        pane.statusChanged()
+                        selectionTimer.restart()
+                    }
                     onActiveFocusChanged: if (activeFocus) pane.activated()
 
                     // current-line band, drawn behind the glyphs
@@ -326,6 +340,66 @@ Item {
                             action: pane.lockAction
                             visible: pane.lockAction !== null
                             shortcutText: "Ctrl+Alt+L"
+                        }
+                    }
+                }
+            }
+
+            Canvas {
+                id: matchOverview
+                objectName: "selectionOverview"
+                width: highlighter.selectionMatches.length > 0 ? 8 : 0
+                height: parent.height
+                visible: width > 0
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+
+                function matchY(match) {
+                    return editor.positionToRectangle(match.start).y / Math.max(1, flick.contentHeight) * height
+                }
+
+                onPaint: {
+                    const ctx = getContext("2d")
+                    ctx.clearRect(0, 0, width, height)
+                    ctx.fillStyle = Prefs.accent
+                    for (const match of highlighter.selectionMatches)
+                        ctx.fillRect(1, Math.min(height - 2, matchY(match)), width - 2, 2)
+                }
+
+                Connections {
+                    target: highlighter
+                    function onSelectionMatchesChanged() { matchOverview.requestPaint() }
+                }
+                Connections {
+                    target: metrics
+                    function onLayoutChanged() { matchOverview.requestPaint() }
+                }
+                Connections {
+                    target: flick
+                    function onContentHeightChanged() { matchOverview.requestPaint() }
+                }
+                Connections {
+                    target: Prefs
+                    function onPaletteChanged() { matchOverview.requestPaint() }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: function(mouse) {
+                        const matches = highlighter.selectionMatches
+                        let nearest = null
+                        let distance = Infinity
+                        for (const match of matches) {
+                            const candidate = Math.abs(matchOverview.matchY(match) - mouse.y)
+                            if (candidate < distance) {
+                                nearest = match
+                                distance = candidate
+                            }
+                        }
+                        if (nearest !== null) {
+                            pane.selectRange(nearest.start, nearest.end)
+                            pane.focusEditor()
                         }
                     }
                 }

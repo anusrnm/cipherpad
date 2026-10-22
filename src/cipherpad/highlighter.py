@@ -92,6 +92,8 @@ class _Highlighter(QSyntaxHighlighter):
         self._search: re.Pattern[str] | None = None
         self._search_format = QTextCharFormat()
         self._search_format.setBackground(QColor("#5a4a12"))
+        self._selection_blocks: dict[int, list[tuple[int, int]]] = {}
+        self._selection_color = QColor("#5a4a12")
         self._rebuild_formats()
 
     # ------------------------------------------------------------- config
@@ -142,6 +144,41 @@ class _Highlighter(QSyntaxHighlighter):
         self._search_format.setBackground(QColor(color))
         self.rehighlight()
 
+    def set_selection(self, needle: str, color: str) -> list[dict[str, int]]:
+        document = self.document()
+        self._selection_blocks.clear()
+        self._selection_color = QColor(color)
+        matches: list[dict[str, int]] = []
+        if document is not None and needle.strip():
+            text = document.toPlainText()
+            needle_length = len(needle.encode("utf-16-le")) // 2
+            previous_end = 0
+            position = 0
+            for match in re.finditer(re.escape(needle), text):
+                position += len(text[previous_end:match.start()].encode("utf-16-le")) // 2
+                end = position + needle_length
+                matches.append({"start": position, "end": end})
+                block = document.findBlock(position)
+                while block.isValid() and block.position() < end:
+                    start_in_block = max(0, position - block.position())
+                    end_in_block = min(block.length() - 1, end - block.position())
+                    if end_in_block > start_in_block:
+                        self._selection_blocks.setdefault(block.blockNumber(), []).append(
+                            (start_in_block, end_in_block - start_in_block)
+                        )
+                    block = block.next()
+                position = end
+                previous_end = match.end()
+        self.rehighlight()
+        return matches
+
+    def _overlay_background(self, start: int, length: int, color: QColor) -> None:
+        # Keep each token's foreground/font when a match spans syntax styles.
+        for position in range(start, start + length):
+            merged = QTextCharFormat(self.format(position))
+            merged.setBackground(color)
+            self.setFormat(position, 1, merged)
+
     def _rebuild_formats(self) -> None:
         self._formats.clear()
         for style, color in self._palette.items():
@@ -179,13 +216,16 @@ class _Highlighter(QSyntaxHighlighter):
         else:
             self.setCurrentBlockState(-1)
 
+        for start, length in self._selection_blocks.get(self.currentBlock().blockNumber(), []):
+            self._overlay_background(start, length, self._selection_color)
+
         if self._search is not None and text:
             for match in self._search.finditer(text):
                 if match.end() == match.start():
                     continue
-                merged = QTextCharFormat(self.format(match.start()))
-                merged.setBackground(self._search_format.background())
-                self.setFormat(match.start(), match.end() - match.start(), merged)
+                start = len(text[:match.start()].encode("utf-16-le")) // 2
+                length = len(match.group().encode("utf-16-le")) // 2
+                self._overlay_background(start, length, self._search_format.background().color())
 
     def _highlight_multiline(self, text: str, claimed: bytearray) -> None:
         if not self._multiline:
@@ -235,6 +275,7 @@ class SyntaxHighlighter(QObject):
     documentChanged = Signal()
     languageChanged = Signal()
     enabledChanged = Signal()
+    selectionMatchesChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -246,6 +287,7 @@ class SyntaxHighlighter(QObject):
         self._search_color = "#5a4a12"
         self._search_pattern: re.Pattern[str] | None = None
         self._tab_width = 4
+        self._selection_matches: list[dict[str, int]] = []
 
     # -------------------------------------------------------- properties
     def _get_document(self) -> QQuickTextDocument | None:
@@ -297,6 +339,17 @@ class SyntaxHighlighter(QObject):
     enabled = Property(bool, _get_enabled, _set_enabled, notify=enabledChanged)
 
     # ------------------------------------------------------------- slots
+    @Property("QVariantList", notify=selectionMatchesChanged)
+    def selectionMatches(self) -> list[dict[str, int]]:
+        return self._selection_matches
+
+    @Slot(str, str)
+    def setSelectionHighlight(self, text: str, color: str) -> None:
+        self._selection_matches = (
+            self._highlighter.set_selection(text, color) if self._highlighter is not None else []
+        )
+        self.selectionMatchesChanged.emit()
+
     @Slot("QVariantMap")
     def setPalette(self, palette: dict) -> None:
         self._palette = {str(k): str(v) for k, v in dict(palette).items()}
